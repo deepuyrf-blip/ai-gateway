@@ -1,0 +1,15 @@
+services:
+  gateway:
+    build: .
+    image: ai-gateway:local
+    container_name: ai-gateway
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    environment:
+      PORT: "7860"
+      GATEWAY_DATA_DIR: "/data"
+      COOLDOWN_SECONDS: "120"
+      # PUBLIC_BASE_URL: "https://your-domain"   # shown in the Agents page
+    volumes:
+      - ./data:/data
