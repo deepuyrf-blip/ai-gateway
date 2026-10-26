@@ -97,8 +97,19 @@
   .flex{display:flex;align-items:center;gap:8px}
   .spacer{flex:1}
   @media(max-width:820px){
-    aside{display:none}
+    .app{flex-direction:column}
+    aside{width:100%;flex:none;height:auto;position:sticky;top:0;z-index:40;
+          border-right:0;border-bottom:1px solid var(--line);padding:10px 12px;
+          display:flex;align-items:center;gap:10px;overflow-x:auto;
+          background:rgba(10,12,17,.94);backdrop-filter:blur(10px)}
+    .brand{padding:0;flex:none}
+    .brand small{display:none}
+    nav{display:flex;gap:6px;overflow-x:auto;flex:1;margin:0}
+    nav a{white-space:nowrap;margin:0;padding:7px 11px;font-size:13px}
+    .sidefoot{display:none}
     main{padding:16px 14px 60px}
+    h1{font-size:18px}
+    .stat{min-width:calc(50% - 6px)}
   }
 </style>
 </head>
@@ -146,6 +157,11 @@
     <!-- OVERVIEW -->
     <section id="tab-overview">
       <h1>Overview</h1><div class="sub">Last 24 hours</div>
+      <div id="emptyCta" class="card hide" style="margin-bottom:14px;border-color:rgba(124,92,255,.45)">
+        <b>No provider keys yet.</b>
+        <span class="muted">Add at least one key and requests will start flowing here.</span>
+        <div style="margin-top:10px"><button class="primary sm" onclick="goTab('providers')">Go to Providers →</button></div>
+      </div>
       <div class="row">
         <div class="card stat"><div class="k">Requests</div><div class="v" id="sReq">0</div></div>
         <div class="card stat"><div class="k">Successful</div><div class="v" id="sOk">0</div></div>
@@ -287,6 +303,7 @@ async function load(){
 
 function renderOverview(){
   const s = STATE.stats;
+  $("emptyCta").classList.toggle("hide", STATE.keys.length > 0);
   $("sReq").textContent = fmt(s.requests);
   $("sOk").textContent  = fmt(s.ok);
   $("sPt").textContent  = fmt(s.prompt_tokens);
@@ -410,14 +427,13 @@ async function rotateKey(){
 }
 
 /* ---------- nav ---------- */
-document.querySelectorAll("nav a").forEach(a=>{
-  a.onclick = () => {
-    document.querySelectorAll("nav a").forEach(x=>x.classList.remove("on"));
-    a.classList.add("on");
-    document.querySelectorAll("main section").forEach(s=>s.classList.add("hide"));
-    $("tab-"+a.dataset.tab).classList.remove("hide");
-  };
-});
+function goTab(name){
+  document.querySelectorAll("nav a").forEach(x=>x.classList.toggle("on", x.dataset.tab===name));
+  document.querySelectorAll("main section").forEach(s=>s.classList.add("hide"));
+  const el = $("tab-"+name); if (el) el.classList.remove("hide");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+document.querySelectorAll("nav a").forEach(a=>{ a.onclick = () => goTab(a.dataset.tab); });
 boot();
 </script>
 </body>
