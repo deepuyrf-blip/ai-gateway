@@ -123,6 +123,22 @@ client.chat.completions.create(model="auto", messages=[{"role":"user","content":
 Use `"model": "auto"` to let the router pick the best available key, or
 `"model": "<provider>/auto"` to pin a provider.
 
+
+## Built-in API tester
+
+Open **`/tester`** on the gateway (e.g. `http://localhost:7860/tester`) — or the
+standalone `web/tester.html` file — to send a real request from the browser:
+
+- Base URL, API key, auth header style (`Bearer` / `x-api-key` / `X-API-Key`)
+- Wire: OpenAI (`/v1/chat/completions`) or Anthropic (`/v1/messages`)
+- Model, max tokens, prompt
+- Shows status, latency, which provider served it, the reply text and raw JSON
+- **Test connection** hits `/v1/models`
+- URL/key/model are remembered in `localStorage`; last 12 requests kept
+
+The gateway sends permissive CORS headers so the tester also works when the page
+is opened from a different origin (e.g. straight off disk).
+
 ## Configuration
 
 | Env | Default | Meaning |
