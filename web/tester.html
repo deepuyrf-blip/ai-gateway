@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API Tester</title>
+<style>
+  :root{--bg:#0a0c11;--panel:#11141c;--panel2:#161a24;--line:#232936;--txt:#e8ecf4;
+        --mut:#8b94a7;--acc:#7c5cff;--acc2:#22d3ee;--ok:#2dd4a7;--warn:#f5b944;--bad:#f0526d;--r:14px}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;color:var(--txt);
+    font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:radial-gradient(1100px 520px at 8% -10%,#1a1440 0,transparent 60%),
+               radial-gradient(900px 460px at 108% 0,#06333d 0,transparent 55%),var(--bg)}
+  .wrap{max-width:860px;margin:0 auto;padding:22px 16px 70px}
+  header{display:flex;align-items:center;gap:11px;margin-bottom:18px}
+  .logo{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:800;
+    background:linear-gradient(135deg,var(--acc),var(--acc2));color:#08111a}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--mut);font-size:12.5px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:var(--r);padding:16px;margin-bottom:14px}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 5px}
+  input,select,textarea{width:100%;font:inherit;background:#0b0e15;border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;color:var(--txt);outline:none}
+  input:focus,select:focus,textarea:focus{border-color:#3a4a6b}
+  textarea{min-height:110px;resize:vertical}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:150px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  button{font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--txt);padding:10px 15px;cursor:pointer}
+  button:hover{border-color:#33405a}
+  .primary{background:linear-gradient(135deg,var(--acc),#5b8cff);border:0;color:#fff}
+  .primary:disabled{opacity:.55;cursor:not-allowed}
+  .ghost{background:transparent}
+  .sm{padding:6px 10px;font-size:12px}
+  .flex{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .spacer{flex:1}
+  .pill{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+  .pill.ok{color:var(--ok);border-color:rgba(45,212,167,.4);background:rgba(45,212,167,.1)}
+  .pill.bad{color:var(--bad);border-color:rgba(240,82,109,.4);background:rgba(240,82,109,.1)}
+  .pill.warn{color:var(--warn);border-color:rgba(245,185,68,.4);background:rgba(245,185,68,.1)}
+  pre{background:#0b0e15;border:1px solid var(--line);border-radius:10px;padding:13px;
+    overflow:auto;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;
+    color:#cfe0ff;white-space:pre-wrap;word-break:break-word;max-height:420px}
+  .out-text{font-family:inherit;font-size:13.5px;color:#eaf1ff;line-height:1.65}
+  .hide{display:none!important}
+  .muted{color:var(--mut)}
+  .hint{font-size:12px;color:var(--mut);margin-top:8px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px}
+  .tabs button.on{background:rgba(124,92,255,.18);border-color:rgba(124,92,255,.5);color:#fff}
+  code{background:#0b0e15;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:12px}
+  .toast{position:fixed;right:16px;bottom:16px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:12px;padding:11px 14px;font-size:13px;z-index:99;box-shadow:0 10px 30px #0008}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">⌁</div>
+    <div>
+      <h1>API Tester</h1>
+      <div class="sub">Paste a base URL + key and send a real request from your browser.</div>
+    </div>
+  </header>
+
+  <!-- ---------- connection ---------- -->
+  <div class="card">
+    <label>Base URL</label>
+    <input id="base" placeholder="http://localhost:7860" autocomplete="off" spellcheck="false">
+    <div class="hint">Gateway root, e.g. <code>http://localhost:7860</code> or <code>https://xxx.trycloudflare.com</code>. Don't add <code>/v1</code>.</div>
+
+    <div class="grid2" style="margin-top:12px">
+      <div>
+        <label>Auth header</label>
+        <select id="auth">
+          <option value="bearer">Authorization: Bearer &lt;key&gt;</option>
+          <option value="x-api-key">x-api-key: &lt;key&gt;  (Anthropic)</option>
+          <option value="X-API-Key">X-API-Key: &lt;key&gt;  (CloudCLI)</option>
+        </select>
+      </div>
+      <div>
+        <label>Wire</label>
+        <select id="wire">
+          <option value="openai">OpenAI — /v1/chat/completions</option>
+          <option value="anthropic">Anthropic — /v1/messages</option>
+        </select>
+      </div>
+    </div>
+
+    <label style="margin-top:12px">API key</label>
+    <input id="key" type="password" placeholder="sk-gw-… / sk-… / your key" autocomplete="off" spellcheck="false">
+    <div class="flex" style="margin-top:8px">
+      <button class="sm ghost" onclick="toggleKey()" id="keyBtn">Show key</button>
+      <button class="sm ghost" onclick="clearAll()">Clear saved</button>
+      <div class="spacer"></div>
+      <span class="muted" id="savedHint" style="font-size:11.5px"></span>
+    </div>
+  </div>
+
+  <!-- ---------- request ---------- -->
+  <div class="card">
+    <div class="grid2">
+      <div>
+        <label>Model</label>
+        <input id="model" value="auto" autocomplete="off" spellcheck="false">
+      </div>
+      <div>
+        <label>Max tokens</label>
+        <input id="maxtok" type="number" value="256" min="1" max="8192">
+      </div>
+    </div>
+    <label style="margin-top:12px">Prompt</label>
+    <textarea id="prompt">Say "hello" in five words.</textarea>
+
+    <div class="flex" style="margin-top:14px">
+      <button class="primary" id="sendBtn" onclick="send()">Send request</button>
+      <button onclick="testConn()">Test connection</button>
+      <div class="spacer"></div>
+      <span class="muted" id="status" style="font-size:12.5px"></span>
+    </div>
+  </div>
+
+  <!-- ---------- result ---------- -->
+  <div class="card hide" id="resultCard">
+    <div class="flex" style="margin-bottom:10px">
+      <span class="pill" id="rStatus">—</span>
+      <span class="pill" id="rTime">—</span>
+      <span class="pill" id="rProv">—</span>
+      <div class="spacer"></div>
+      <div class="tabs">
+        <button class="sm on" id="tabText" onclick="showTab('text')">Text</button>
+        <button class="sm" id="tabRaw" onclick="showTab('raw')">Raw JSON</button>
+      </div>
+    </div>
+    <div id="outText" class="out-text"></div>
+    <pre id="outRaw" class="hide"></pre>
+  </div>
+
+  <!-- ---------- history ---------- -->
+  <div class="card hide" id="histCard">
+    <div class="flex" style="margin-bottom:8px"><b>Recent</b>
+      <div class="spacer"></div><button class="sm ghost" onclick="clearHist()">Clear</button></div>
+    <div id="histList"></div>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LS = "ai-gateway-tester";
+
+function toast(m){
+  const d = document.createElement("div"); d.className="toast"; d.textContent=m;
+  document.body.appendChild(d); setTimeout(()=>d.remove(), 2400);
+}
+
+/* ---------- persistence ---------- */
+function save(){
+  localStorage.setItem(LS, JSON.stringify({
+    base:$("base").value, key:$("key").value, auth:$("auth").value,
+    wire:$("wire").value, model:$("model").value, maxtok:$("maxtok").value,
+    prompt:$("prompt").value
+  }));
+  $("savedHint").textContent = "saved locally ✓";
+  setTimeout(()=>{ $("savedHint").textContent=""; }, 1500);
+}
+function load(){
+  try{
+    const s = JSON.parse(localStorage.getItem(LS) || "{}");
+    for (const k of ["base","key","auth","wire","model","maxtok","prompt"]) if (s[k] != null) $(k).value = s[k];
+  }catch(e){}
+}
+function clearAll(){
+  localStorage.removeItem(LS); location.reload();
+}
+["base","key","auth","wire","model","maxtok","prompt"].forEach(id=>{
+  $(id).addEventListener("change", save);
+  $(id).addEventListener("blur", save);
+});
+function toggleKey(){
+  const k = $("key");
+  if (k.type === "password"){ k.type = "text"; $("keyBtn").textContent = "Hide key"; }
+  else { k.type = "password"; $("keyBtn").textContent = "Show key"; }
+}
+
+/* ---------- helpers ---------- */
+function baseUrl(){ return ($("base").value || "").trim().replace(/\/+$/, ""); }
+function authHeaders(){
+  const k = $("key").value.trim();
+  const a = $("auth").value;
+  if (!k) return {};
+  if (a === "bearer") return { "Authorization": "Bearer " + k };
+  return { [a]: k };
+}
+function setStatus(msg, cls){
+  const el = $("status");
+  el.textContent = msg || "";
+  el.style.color = cls === "bad" ? "var(--bad)" : cls === "ok" ? "var(--ok)" : "var(--mut)";
+}
+function showTab(which){
+  $("tabText").classList.toggle("on", which==="text");
+  $("tabRaw").classList.toggle("on", which==="raw");
+  $("outText").classList.toggle("hide", which!=="text");
+  $("outRaw").classList.toggle("hide", which!=="raw");
+}
+
+/* ---------- requests ---------- */
+async function testConn(){
+  const base = baseUrl();
+  if (!base) return setStatus("enter a base URL first", "bad");
+  setStatus("testing…");
+  const t0 = performance.now();
+  try{
+    const r = await fetch(base + "/v1/models", { headers: { ...authHeaders() } });
+    const ms = Math.round(performance.now() - t0);
+    const txt = await r.text();
+    setStatus(r.ok ? `reachable · ${r.status} · ${ms}ms` : `HTTP ${r.status} · ${ms}ms`, r.ok ? "ok" : "bad");
+    showResult(r.status, ms, "", txt, true);
+  }catch(e){
+    setStatus("network error", "bad");
+    showResult(0, Math.round(performance.now()-t0), "",
+      "Could not reach the URL.\n\n" + e + "\n\nLikely causes:\n" +
+      "• wrong base URL / service not running\n" +
+      "• CORS blocked — the target must send Access-Control-Allow-Origin\n" +
+      "• https page calling http:// (mixed content)", true);
+  }
+}
+
+async function send(){
+  const base = baseUrl();
+  if (!base) return setStatus("enter a base URL first", "bad");
+  if (!$("key").value.trim()) return setStatus("enter an API key", "bad");
+
+  const wire = $("wire").value;
+  const path = wire === "openai" ? "/v1/chat/completions" : "/v1/messages";
+  const model = $("model").value.trim() || "auto";
+  const maxTok = Number($("maxtok").value) || 256;
+  const prompt = $("prompt").value;
+
+  const body = wire === "openai"
+    ? { model, max_tokens: maxTok, stream: false, messages: [{ role: "user", content: prompt }] }
+    : { model, max_tokens: maxTok, stream: false, messages: [{ role: "user", content: prompt }] };
+
+  $("sendBtn").disabled = true;
+  setStatus("sending…");
+  const t0 = performance.now();
+  try{
+    const r = await fetch(base + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body)
+    });
+    const ms = Math.round(performance.now() - t0);
+    const txt = await r.text();
+    let json = null;
+    try{ json = JSON.parse(txt); }catch(e){}
+
+    const prov = (json && json._gateway_provider) || (r.headers.get("x-gateway-provider") || "");
+    let text = "";
+    if (json){
+      if (wire === "openai") text = json?.choices?.[0]?.message?.content || "";
+      else text = (json.content || []).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+      if (!text && json.error) text = "⚠ " + (json.error.message || JSON.stringify(json.error));
+    }
+
+    setStatus(r.ok ? `ok · ${r.status} · ${ms}ms` : `failed · ${r.status}`, r.ok ? "ok" : "bad");
+    showResult(r.status, ms, prov, text || txt, false, txt);
+    pushHistory(r.status, ms, model, text || txt);
+    if (r.ok) toast("Request succeeded ✓");
+  }catch(e){
+    setStatus("network error", "bad");
+    showResult(0, Math.round(performance.now()-t0), "",
+      "Request failed.\n\n" + e + "\n\nMost likely CORS: the endpoint must allow your origin.\n" +
+      "Run the gateway with CORS enabled, or open this page from the same origin.", false);
+  }finally{
+    $("sendBtn").disabled = false;
+  }
+}
+
+function showResult(status, ms, prov, text, rawOnly, raw){
+  $("resultCard").classList.remove("hide");
+  const st = $("rStatus");
+  st.textContent = status ? `HTTP ${status}` : "ERROR";
+  st.className = "pill " + (status >= 200 && status < 300 ? "ok" : status ? "bad" : "warn");
+  $("rTime").textContent = ms + " ms";
+  $("rProv").textContent = prov ? "via " + prov : "—";
+  $("outText").textContent = text || "(empty)";
+  $("outRaw").textContent = raw || text || "";
+  showTab(rawOnly ? "raw" : "text");
+}
+
+/* ---------- history ---------- */
+function pushHistory(status, ms, model, text){
+  let h = [];
+  try{ h = JSON.parse(localStorage.getItem(LS + "-hist") || "[]"); }catch(e){}
+  h.unshift({ t: Date.now(), status, ms, model, text: String(text).slice(0, 240) });
+  h = h.slice(0, 12);
+  localStorage.setItem(LS + "-hist", JSON.stringify(h));
+  renderHist();
+}
+function renderHist(){
+  let h = [];
+  try{ h = JSON.parse(localStorage.getItem(LS + "-hist") || "[]"); }catch(e){}
+  if (!h.length){ $("histCard").classList.add("hide"); return; }
+  $("histCard").classList.remove("hide");
+  $("histList").innerHTML = h.map(x=>`
+    <div style="border-top:1px solid var(--line);padding:8px 0;font-size:12.5px">
+      <div class="flex">
+        <span class="pill ${x.status>=200&&x.status<300?'ok':'bad'}">${x.status||'ERR'}</span>
+        <span class="muted">${x.ms}ms</span>
+        <span class="muted">${new Date(x.t).toLocaleTimeString()}</span>
+        <div class="spacer"></div>
+        <span class="muted">${(x.model||'').replace(/[<>&]/g,'')}</span>
+      </div>
+      <div class="muted" style="margin-top:4px">${String(x.text).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])).slice(0,160)}</div>
+    </div>`).join("");
+}
+function clearHist(){ localStorage.removeItem(LS + "-hist"); renderHist(); }
+
+/* ---------- boot ---------- */
+load();
+renderHist();
+if (!$("base").value) $("base").value = location.origin !== "null" ? location.origin : "http://localhost:7860";
+</script>
+</body>
+</html>
