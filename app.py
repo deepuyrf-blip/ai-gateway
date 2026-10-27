@@ -199,6 +199,18 @@ def unified_key() -> str:
 # --------------------------------------------------------------------------- #
 app = FastAPI(title="AI Gateway", docs_url=None, redoc_url=None)
 
+# Allow browser-based testers / dashboards on other origins to call /v1/*.
+# Requests still need a valid key, so this is safe to leave open.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
+
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -268,6 +280,13 @@ class KeyIn(BaseModel):
 def index() -> HTMLResponse:
     f = WEB_DIR / "index.html"
     return HTMLResponse(f.read_text(encoding="utf-8") if f.exists() else "<h1>AI Gateway</h1>")
+
+
+@app.get("/tester", response_class=HTMLResponse)
+def tester() -> HTMLResponse:
+    """Standalone API tester (same-origin, so no CORS involved)."""
+    f = WEB_DIR / "tester.html"
+    return HTMLResponse(f.read_text(encoding="utf-8") if f.exists() else "<h1>tester.html missing</h1>")
 
 
 @app.get("/api/status")
