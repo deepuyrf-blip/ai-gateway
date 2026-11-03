@@ -363,6 +363,75 @@ def index() -> HTMLResponse:
     return HTMLResponse(f.read_text(encoding="utf-8") if f.exists() else "<h1>AI Gateway</h1>")
 
 
+_ICON_CACHE: dict[str, bytes] = {}
+
+
+@app.get("/app", response_class=HTMLResponse)
+def mobile_app() -> HTMLResponse:
+    """Mobile-first chat PWA (installable from the phone browser)."""
+    f = WEB_DIR / "app.html"
+    return HTMLResponse(f.read_text(encoding="utf-8") if f.exists() else "<h1>missing app.html</h1>")
+
+
+@app.get("/app/manifest.webmanifest")
+def app_manifest() -> JSONResponse:
+    return JSONResponse({
+        "name": "Claude Gateway",
+        "short_name": "Claude",
+        "description": "Chat with your AI gateway",
+        "start_url": "/app",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": "#0f0e0c",
+        "theme_color": "#0f0e0c",
+        "icons": [
+            {"src": "/app/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/app/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    })
+
+
+@app.get("/app/sw.js")
+def app_sw() -> Response:
+    js = ("self.addEventListener('install',e=>self.skipWaiting());"
+          "self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));"
+          "self.addEventListener('fetch',()=>{});")
+    return Response(js, media_type="application/javascript",
+                    headers={"Service-Worker-Allowed": "/"})
+
+
+@app.get("/app/icon.png")
+def app_icon() -> Response:
+    if "png" in _ICON_CACHE:
+        return Response(_ICON_CACHE["png"], media_type="image/png")
+    data = b""
+    try:
+        from PIL import Image, ImageDraw
+        import io as _io
+        size = 512
+        img = Image.new("RGB", (size, size), (15, 14, 12))
+        d = ImageDraw.Draw(img)
+        cx = cy = size / 2
+        import math as _m
+        pts = []
+        for i in range(16):
+            ang = -_m.pi / 2 + i * _m.pi / 8
+            r = 200 if i % 2 == 0 else 78
+            pts.append((cx + _m.cos(ang) * r, cy + _m.sin(ang) * r))
+        d.polygon(pts, fill=(217, 119, 87))
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        data = buf.getvalue()
+    except Exception:
+        data = bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+            "1f15c4890000000d4944415478da63f8cfc000000301010018dd8db0"
+            "0000000049454e44ae426082")
+    _ICON_CACHE["png"] = data
+    return Response(data, media_type="image/png")
+
+
 @app.get("/tester", response_class=HTMLResponse)
 def tester() -> HTMLResponse:
     """Standalone API tester (same-origin, so no CORS involved)."""
