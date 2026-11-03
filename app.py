@@ -482,15 +482,15 @@ def api_rotate(_: None = Depends(require_session)) -> dict:
 async def fetch_provider_models(key: dict) -> list[str]:
     """Ask the provider which models this key can use."""
     prov = PROVIDER_MAP[key["provider"]]
-    base = (key["base_override"] or prov["base"]).rstrip("/")
+    base, secret = provider_base_secret(key)
     try:
         async with httpx.AsyncClient(timeout=25) as cx:
             if prov["type"] == "anthropic":
                 url = base + "/v1/models"
-                headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01"}
+                headers = {"x-api-key": secret, "anthropic-version": "2023-06-01"}
             else:
                 url = base + "/models"
-                headers = {"Authorization": f"Bearer {key['secret']}"}
+                headers = {"Authorization": f"Bearer {secret}"}
             r = await cx.get(url, headers=headers)
             if r.status_code >= 400:
                 return []
@@ -510,16 +510,16 @@ async def fetch_provider_models(key: dict) -> list[str]:
 async def run_health(key: dict, with_models: bool = True) -> dict:
     """Ping the provider, record health + model list, return the result."""
     prov = PROVIDER_MAP[key["provider"]]
-    base = (key["base_override"] or prov["base"]).rstrip("/")
+    base, secret = provider_base_secret(key)
     ok, status, body = False, 0, ""
     if prov["type"] == "anthropic":
         url = base + "/v1/messages"
-        headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01",
+        headers = {"x-api-key": secret, "anthropic-version": "2023-06-01",
                    "content-type": "application/json"}
         first = resolve_model(key, "claude-3-5-haiku-latest")
     else:
         url = base + "/chat/completions"
-        headers = {"Authorization": f"Bearer {key['secret']}", "content-type": "application/json"}
+        headers = {"Authorization": f"Bearer {secret}", "content-type": "application/json"}
         first = resolve_model(key)
 
     candidates = [first]
@@ -648,14 +648,25 @@ def bump(kid: str) -> None:
         c.execute("UPDATE keys SET requests=requests+1 WHERE id=?", (kid,))
 
 
-def resolve_url(key: dict) -> tuple[str, dict]:
+def provider_base_secret(key: dict) -> tuple[str, str]:
+    """Resolve the base URL + the real secret for a key.
+
+    Some providers need extra data baked into the secret (Cloudflare stores
+    "account_id:token" and the account id is substituted into the base URL).
+    """
     prov = PROVIDER_MAP[key["provider"]]
-    base = (key["base_override"] or prov["base"]).rstrip("/")
-    secret = key["secret"]
+    base = (key.get("base_override") or prov.get("base") or "").rstrip("/")
+    secret = key.get("secret") or ""
     if prov["id"] == "cloudflare" and ":" in secret:
         acct, token = secret.split(":", 1)
         base = base.replace("{account_id}", acct)
         secret = token
+    return base, secret
+
+
+def resolve_url(key: dict) -> tuple[str, dict]:
+    prov = PROVIDER_MAP[key["provider"]]
+    base, secret = provider_base_secret(key)
     if prov["type"] == "anthropic":
         return base + "/v1/messages", {"x-api-key": secret, "anthropic-version": "2023-06-01"}
     return base + "/chat/completions", {"Authorization": f"Bearer {secret}"}
