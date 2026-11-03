@@ -487,12 +487,12 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
             url = base + "/v1/messages"
             headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01",
                        "content-type": "application/json"}
-            payload = {"model": "claude-3-5-haiku-latest", "max_tokens": 8,
+            payload = {"model": resolve_model(key, "claude-3-5-haiku-latest"), "max_tokens": 8,
                        "messages": [{"role": "user", "content": "ping"}]}
         else:
             url = base + "/chat/completions"
             headers = {"Authorization": f"Bearer {key['secret']}", "content-type": "application/json"}
-            payload = {"model": "auto", "max_tokens": 8,
+            payload = {"model": resolve_model(key), "max_tokens": 8,
                        "messages": [{"role": "user", "content": "ping"}]}
         async with httpx.AsyncClient(timeout=30) as cx:
             r = await cx.post(url, headers=headers, json=payload)
@@ -607,6 +607,32 @@ def resolve_url(key: dict) -> tuple[str, dict]:
     return base + "/chat/completions", {"Authorization": f"Bearer {secret}"}
 
 
+PREF_SUBSTR = ("flash", "mini", "haiku", "lite", "small", "8b", "turbo", "fast")
+
+
+def resolve_model(key: dict, model: str = "") -> str:
+    """Turn a routing id like 'auto' into a concrete model this key can actually serve.
+
+    Some OpenAI-compatible endpoints (notably Google's) reject the literal model
+    name "auto" with a 404, so we substitute a real model from the key's list.
+    """
+    prov = PROVIDER_MAP[key["provider"]]
+    base = (key.get("base_override") or prov.get("base") or "")
+    m = (model or "").strip()
+    if m and m != "auto" and not m.endswith("/auto"):
+        return m
+    mids = _key_models(key)
+    if "openrouter.ai" in base:
+        return "auto"                      # OpenRouter has a real "auto" route
+    if mids:
+        for pref in PREF_SUBSTR:
+            for x in mids:
+                if pref in x.lower():
+                    return x
+        return mids[0]
+    return m or "auto"
+
+
 async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
     """Try each key in order until one answers. Returns (status, body)."""
     model = payload.get("model") or "auto"
@@ -620,8 +646,9 @@ async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
         url, auth = resolve_url(key)
         headers = {**auth, "content-type": "application/json"}
         body = dict(payload)
-        if prov["type"] == "openai" and body.get("model") in (None, "", "auto"):
-            body.pop("model", None)
+        cur = body.get("model")
+        if cur in (None, "") or str(cur) == "auto" or str(cur).endswith("/auto"):
+            body["model"] = resolve_model(key, str(cur or "auto"))
 
         t0 = time.time()
         try:
