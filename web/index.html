@@ -444,11 +444,25 @@ function renderModels(){
 
 let COMPRESS = {mode:"standard", modes:["off","lossless","standard","aggressive"]};
 let ROUTING = {strategy:"balanced", strategies:["balanced","reliable","fastest","smartest"]};
+let COOL = {enabled:true, transient_s:20, quota_s:45, auth_s:300};
 
 async function loadCompression(){
   try { COMPRESS = await api("/api/compression"); } catch(e) {}
   try { ROUTING = await api("/api/routing"); } catch(e) {}
+  try { COOL = await api("/api/cooling"); } catch(e) {}
   renderCompression();
+}
+
+async function saveCooling(on){
+  await api("/api/cooling", {method:"PUT", body: JSON.stringify({enabled: on})});
+  COOL.enabled = on;
+  toast(on ? "Cooling on — keys auto-resume" : "Cooling off — keys always in rotation");
+}
+
+async function clearAllCooling(){
+  await api("/api/cooling/clear", {method:"POST"});
+  toast("All keys resumed");
+  await load();
 }
 
 async function saveRouting(){
@@ -485,6 +499,19 @@ function renderCompression(){
     <p class="muted" style="font-size:11.5px;margin:8px 0 0">
       <b>balanced</b> reliability+speed+intelligence · <b>reliable</b> prefers proven keys ·
       <b>fastest</b> prefers low latency · <b>smartest</b> prefers bigger models
+    </p>
+    <h3 style="margin:16px 0 8px;font-size:13.5px">Cooling</h3>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="coolOn" ${COOL.enabled?"checked":""} onchange="saveCooling(this.checked)">
+        Auto-pause failing keys
+      </label>
+      <button class="sm" onclick="clearAllCooling()">Resume all now</button>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin:8px 0 0">
+      When a key errors it is parked for <b>${COOL.quota_s||45}s</b> (rate limit),
+      <b>${COOL.transient_s||20}s</b> (upstream error) or <b>${COOL.auth_s||300}s</b> (bad key).
+      Uncheck to keep every key always in rotation — a flaky relay then never stalls the project.
     </p>`;
 }
 
