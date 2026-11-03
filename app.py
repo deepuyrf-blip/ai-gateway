@@ -497,7 +497,7 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
     for cand in rank_models(_key_models(key)):
         if cand not in candidates:
             candidates.append(cand)
-    candidates = candidates[:5]
+    candidates = candidates[:8]
 
     for cand in candidates:
         try:
@@ -625,6 +625,11 @@ def resolve_url(key: dict) -> tuple[str, dict]:
 
 PREF_SUBSTR = ("flash", "mini", "haiku", "lite", "small", "8b", "turbo", "fast")
 
+# model families that are NOT plain chat models — never auto-pick these
+BAD_SUBSTR = ("tts", "audio", "imagen", "veo", "embed", "aqa", "native-audio",
+              "-live", "image-generation", "imagine", "whisper", "rerank",
+              "moderation", "guard", "clip", "bge-", "e5-")
+
 
 def resolve_model(key: dict, model: str = "") -> str:
     """Turn a routing id like 'auto' into a concrete model this key can actually serve.
@@ -657,10 +662,12 @@ def rank_models(mids: list[str]) -> list[str]:
         nums = [int(n) for n in re.findall(r"\d+", low)[:3]]
         return (pref, nums, -len(low))
 
+    good = [m for m in mids if not any(b in m.lower() for b in BAD_SUBSTR)]
+    pool = good or mids
     try:
-        return sorted(mids, key=score, reverse=True)
+        return sorted(pool, key=score, reverse=True)
     except Exception:
-        return list(mids)
+        return list(pool)
 
 
 async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
