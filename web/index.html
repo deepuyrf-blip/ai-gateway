@@ -410,6 +410,7 @@ function renderKeys(){
         </div></details>` : ""}
 
       <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${k.cooling?`<button class="sm" onclick="clearCooldown('${k.id}')" style="border-color:var(--warn);color:var(--warn)">Resume now</button>`:""}
         <button class="sm" onclick="testKey('${k.id}')">Test</button>
         <button class="sm" onclick="loadModels('${k.id}')">Models</button>
         <button class="sm" onclick="setLimit('${k.id}', ${lim})">Limit</button>
@@ -528,6 +529,12 @@ async function testKey(id){
   const j = await api(`/api/test/${id}`, {method:"POST"});
   if (j.ok) toast(`Healthy ✓ ${j.models_count?`· ${j.models_count} models`:""}`);
   else toast(`Failed (${j.status||"err"})`);
+  await load();
+}
+
+async function clearCooldown(id){
+  await api(`/api/keys/${id}`, {method:"PATCH", body: JSON.stringify({cooldown_until: 0})});
+  toast("Cooling cleared — key is back in rotation");
   await load();
 }
 
