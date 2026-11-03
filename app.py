@@ -170,6 +170,7 @@ def init_db() -> None:
             ("health_ts", "REAL DEFAULT 0"),
             ("models", "TEXT DEFAULT ''"),
             ("models_ts", "REAL DEFAULT 0"),
+            ("small_only", "INTEGER DEFAULT 0"),
         ]:
             try:
                 c.execute(f"ALTER TABLE keys ADD COLUMN {col} {ddl}")
@@ -377,6 +378,7 @@ def api_state(_: None = Depends(require_session)) -> dict:
         except Exception:
             k["models"] = []
         k["models_count"] = len(k["models"])
+        k["small_only"] = int(k.get("small_only") or 0)
         k.pop("models_ts", None)
 
     since = time.time() - 86400
@@ -451,7 +453,7 @@ async def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
 
 @app.patch("/api/keys/{kid}")
 def api_patch_key(kid: str, body: dict, _: None = Depends(require_session)) -> dict:
-    allowed = {"enabled", "label", "cooldown_until", "base_override", "token_limit"}
+    allowed = {"enabled", "label", "cooldown_until", "base_override", "token_limit", "small_only"}
     sets, args = [], []
     for k, v in body.items():
         if k in allowed:
@@ -621,11 +623,19 @@ def _key_models(row: dict) -> list[str]:
         return []
 
 
-def pick_keys(wire: str, model: str = "") -> list[dict]:
+BIG_PAYLOAD = int(os.environ.get("BIG_PAYLOAD_BYTES", "40000"))
+
+
+def pick_keys(wire: str, model: str = "", size: int = 0) -> list[dict]:
     """Enabled, not-cooling keys. Prefer keys that actually serve the asked model."""
     rows = [dict(r) for r in with_db("SELECT * FROM keys WHERE enabled=1 ORDER BY created")]
     now = time.time()
     alive = [r for r in rows if r["cooldown_until"] <= now]
+
+    # a key that returned 413 before gets skipped for big requests (Workers AI, etc.)
+    if size and size > BIG_PAYLOAD:
+        roomy = [r for r in alive if not r.get("small_only")]
+        alive = roomy or alive
 
     m = (model or "").strip()
     if m and m != "auto" and not m.endswith("/auto"):
@@ -764,7 +774,11 @@ def rank_models(mids: list[str]) -> list[str]:
 async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
     """Try each key in order until one answers. Returns (status, body)."""
     model = payload.get("model") or "auto"
-    keys = pick_keys(wire, model)
+    try:
+        size = len(json.dumps(payload))
+    except Exception:
+        size = 0
+    keys = pick_keys(wire, model, size)
     if not keys:
         return 503, {"error": {"message": "no keys configured — add a provider key in the dashboard"}}
 
@@ -788,6 +802,15 @@ async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
             log_event(provider=prov["id"], key_id=key["id"], wire=wire, model=model,
                       status=0, ok=False, ms=int((time.time() - t0) * 1000), error=str(e))
             last_err = str(e)
+            continue
+
+        if r.status_code == 413:
+            # payload too large for this provider — remember and try a roomier key
+            with db() as c:
+                c.execute("UPDATE keys SET small_only=1 WHERE id=?", (key["id"],))
+            log_event(provider=prov["id"], key_id=key["id"], wire=wire, model=model,
+                      status=413, ok=False, ms=ms, error="payload too large for this provider")
+            last_err = "413 payload too large"
             continue
 
         if r.status_code in (401, 402, 403, 429, 500, 502, 503, 529):
