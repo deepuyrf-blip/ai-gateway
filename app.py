@@ -1037,6 +1037,8 @@ async def v1_chat(request: Request, _: str = Depends(require_unified)):
 async def v1_messages(request: Request, _: str = Depends(require_unified)):
     req = await request.json()
     req, saved, cmode = compressor.compress_body(req, compress_mode(request))
+    if saved:
+        print(f"[compress] {cmode}: saved {saved} chars (~{saved//4} tokens)", flush=True)
     model = req.get("model", "claude-3-5-sonnet-latest")
     keys = pick_keys("anthropic")
     native = [k for k in keys if PROVIDER_MAP[k["provider"]]["type"] == "anthropic"]
