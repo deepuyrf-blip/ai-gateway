@@ -483,6 +483,33 @@ async def fetch_provider_models(key: dict) -> list[str]:
     """Ask the provider which models this key can use."""
     prov = PROVIDER_MAP[key["provider"]]
     base, secret = provider_base_secret(key)
+
+    # Workers AI has no OpenAI-style /models — it exposes a search endpoint instead
+    if prov["id"] == "cloudflare":
+        acct = (key.get("secret") or "").split(":", 1)[0]
+        if not acct:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=25) as cx:
+                r = await cx.get(
+                    f"https://api.cloudflare.com/client/v4/accounts/{acct}/ai/models/search",
+                    params={"per_page": 200},
+                    headers={"Authorization": f"Bearer {secret}"})
+                if r.status_code >= 400:
+                    return []
+                d = r.json()
+            out = []
+            for m in d.get("result") or []:
+                if not isinstance(m, dict):
+                    continue
+                task = json.dumps(m.get("task") or {}).lower()
+                name = m.get("name") or ""
+                if name and "text generation" in task:
+                    out.append(name)
+            return sorted(set(out))
+        except Exception:
+            return []
+
     try:
         async with httpx.AsyncClient(timeout=25) as cx:
             if prov["type"] == "anthropic":
@@ -672,6 +699,8 @@ def resolve_url(key: dict) -> tuple[str, dict]:
     return base + "/chat/completions", {"Authorization": f"Bearer {secret}"}
 
 
+CF_DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+
 PREF_SUBSTR = ("flash", "mini", "haiku", "lite", "small", "8b", "turbo", "fast")
 
 # model families that are NOT plain chat models — never auto-pick these
@@ -696,6 +725,8 @@ def resolve_model(key: dict, model: str = "") -> str:
         return "auto"                      # OpenRouter has a real "auto" route
     if mids:
         return rank_models(mids)[0]
+    if prov["id"] == "cloudflare":
+        return CF_DEFAULT_MODEL            # Workers AI rejects "auto"
     return m or "auto"
 
 
