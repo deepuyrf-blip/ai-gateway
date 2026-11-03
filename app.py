@@ -411,6 +411,14 @@ async def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
         raise HTTPException(400, "unknown provider")
     if not body.secret.strip():
         raise HTTPException(400, "secret required")
+    # providers whose base URL needs extra bits baked into the secret
+    if body.provider == "cloudflare" and ":" not in body.secret:
+        raise HTTPException(
+            400,
+            "Cloudflare needs the key as  account_id:token  "
+            "(find the account id on the Workers AI page, then a colon, then the API token)")
+    if body.provider in ("custom_openai", "custom_anthropic") and not body.base_override.strip():
+        raise HTTPException(400, f"{body.provider} needs a base URL (e.g. https://api.example.com)")
     kid = uuid.uuid4().hex[:12]
     with db() as c:
         c.execute("INSERT INTO keys(id,provider,label,secret,base_override,created) VALUES(?,?,?,?,?,?)",
