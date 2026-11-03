@@ -14,6 +14,7 @@ Env:  PORT, GATEWAY_DATA_DIR, GATEWAY_PASSWORD
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -157,6 +158,20 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
         """)
+        # --- migrations (safe to re-run) ---
+        for col, ddl in [
+            ("tokens_used", "INTEGER DEFAULT 0"),
+            ("token_limit", "INTEGER DEFAULT 0"),
+            ("health", "TEXT DEFAULT ''"),
+            ("health_msg", "TEXT DEFAULT ''"),
+            ("health_ts", "REAL DEFAULT 0"),
+            ("models", "TEXT DEFAULT ''"),
+            ("models_ts", "REAL DEFAULT 0"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE keys ADD COLUMN {col} {ddl}")
+            except Exception:
+                pass
 
 
 def setting(k: str, default: str = "") -> str:
@@ -341,6 +356,17 @@ def api_state(_: None = Depends(require_session)) -> dict:
         k["secret_masked"] = (k["secret"][:6] + "…" + k["secret"][-4:]) if len(k["secret"]) > 12 else "•••"
         k.pop("secret", None)
         k["cooling"] = k["cooldown_until"] > time.time()
+        k["tokens_used"] = int(k.get("tokens_used") or 0)
+        k["token_limit"] = int(k.get("token_limit") or 0)
+        k["health"] = k.get("health") or ""
+        k["health_msg"] = k.get("health_msg") or ""
+        k["health_ts"] = float(k.get("health_ts") or 0)
+        try:
+            k["models"] = json.loads(k.get("models") or "[]")
+        except Exception:
+            k["models"] = []
+        k["models_count"] = len(k["models"])
+        k.pop("models_ts", None)
 
     since = time.time() - 86400
     stats = with_db("""
@@ -369,7 +395,7 @@ def api_state(_: None = Depends(require_session)) -> dict:
 
 
 @app.post("/api/keys")
-def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
+async def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
     if body.provider not in PROVIDER_MAP:
         raise HTTPException(400, "unknown provider")
     if not body.secret.strip():
@@ -378,17 +404,21 @@ def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
     with db() as c:
         c.execute("INSERT INTO keys(id,provider,label,secret,base_override,created) VALUES(?,?,?,?,?,?)",
                   (kid, body.provider, body.label, body.secret.strip(), body.base_override.strip(), time.time()))
+    # check health + pull the model list in the background so the UI shows a dot
+    rows = with_db("SELECT * FROM keys WHERE id=?", (kid,))
+    if rows:
+        asyncio.create_task(run_health(dict(rows[0])))
     return {"ok": True, "id": kid}
 
 
 @app.patch("/api/keys/{kid}")
 def api_patch_key(kid: str, body: dict, _: None = Depends(require_session)) -> dict:
-    allowed = {"enabled", "label", "cooldown_until", "base_override"}
+    allowed = {"enabled", "label", "cooldown_until", "base_override", "token_limit"}
     sets, args = [], []
     for k, v in body.items():
         if k in allowed:
             sets.append(f"{k}=?")
-            args.append(int(bool(v)) if k == "enabled" else v)
+            args.append(int(bool(v)) if k == "enabled" else (int(v or 0) if k == "token_limit" else v))
     if not sets:
         return {"ok": False}
     args.append(kid)
@@ -411,37 +441,94 @@ def api_rotate(_: None = Depends(require_session)) -> dict:
     return {"ok": True, "unified_key": k}
 
 
-@app.post("/api/test/{kid}")
-async def api_test(kid: str, _: None = Depends(require_session)) -> dict:
-    rows = with_db("SELECT * FROM keys WHERE id=?", (kid,))
-    if not rows:
-        raise HTTPException(404, "key not found")
-    key = dict(rows[0])
+async def fetch_provider_models(key: dict) -> list[str]:
+    """Ask the provider which models this key can use."""
     prov = PROVIDER_MAP[key["provider"]]
-    base = key["base_override"] or prov["base"]
+    base = (key["base_override"] or prov["base"]).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=25) as cx:
+            if prov["type"] == "anthropic":
+                url = base + "/v1/models"
+                headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01"}
+            else:
+                url = base + "/models"
+                headers = {"Authorization": f"Bearer {key['secret']}"}
+            r = await cx.get(url, headers=headers)
+            if r.status_code >= 400:
+                return []
+            data = r.json()
+        items = data.get("data") if isinstance(data, dict) else data
+        out = []
+        for m in items or []:
+            if isinstance(m, dict):
+                mid = m.get("id") or m.get("name")
+                if mid:
+                    out.append(str(mid))
+        return sorted(set(out))
+    except Exception:
+        return []
+
+
+async def run_health(key: dict, with_models: bool = True) -> dict:
+    """Ping the provider, record health + model list, return the result."""
+    prov = PROVIDER_MAP[key["provider"]]
+    base = (key["base_override"] or prov["base"]).rstrip("/")
+    ok, status, body = False, 0, ""
     try:
         if prov["type"] == "anthropic":
-            url = base.rstrip("/") + "/v1/messages"
+            url = base + "/v1/messages"
             headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01",
                        "content-type": "application/json"}
             payload = {"model": "claude-3-5-haiku-latest", "max_tokens": 8,
                        "messages": [{"role": "user", "content": "ping"}]}
         else:
-            url = base.rstrip("/") + "/chat/completions"
+            url = base + "/chat/completions"
             headers = {"Authorization": f"Bearer {key['secret']}", "content-type": "application/json"}
             payload = {"model": "auto", "max_tokens": 8,
                        "messages": [{"role": "user", "content": "ping"}]}
         async with httpx.AsyncClient(timeout=30) as cx:
             r = await cx.post(url, headers=headers, json=payload)
-        ok = r.status_code < 400
-        with db() as c:
-            c.execute("UPDATE keys SET last_error=?, cooldown_until=? WHERE id=?",
-                      ("" if ok else f"{r.status_code} {r.text[:180]}", 0 if ok else 0, kid))
-        return {"ok": ok, "status": r.status_code, "body": r.text[:400]}
+        status, body = r.status_code, r.text[:400]
+        ok = status < 400
     except Exception as e:
+        body = f"{type(e).__name__}: {e}"[:300]
+
+    models = await fetch_provider_models(key) if with_models else []
+
+    health = "ok" if ok else "bad"
+    msg = "" if ok else f"{status} {body}"[:200]
+    with db() as c:
+        sets, args = "health=?, health_msg=?, health_ts=?", [health, msg, time.time()]
+        if models:
+            sets += ", models=?, models_ts=?"
+            args += [json.dumps(models), time.time()]
+        args.append(key["id"])
+        c.execute(f"UPDATE keys SET {sets} WHERE id=?", tuple(args))
+    return {"ok": ok, "status": status, "body": body,
+            "models": models, "models_count": len(models),
+            "health": health, "health_msg": msg}
+
+
+@app.post("/api/test/{kid}")
+async def api_test(kid: str, _: None = Depends(require_session)) -> dict:
+    rows = with_db("SELECT * FROM keys WHERE id=?", (kid,))
+    if not rows:
+        raise HTTPException(404, "key not found")
+    return await run_health(dict(rows[0]))
+
+
+@app.post("/api/keys/{kid}/models")
+async def api_key_models(kid: str, _: None = Depends(require_session)) -> dict:
+    rows = with_db("SELECT * FROM keys WHERE id=?", (kid,))
+    if not rows:
+        raise HTTPException(404, "key not found")
+    key = dict(rows[0])
+    models = await fetch_provider_models(key)
+    if models:
         with db() as c:
-            c.execute("UPDATE keys SET last_error=? WHERE id=?", (str(e)[:200], kid))
-        return {"ok": False, "status": 0, "body": str(e)[:300]}
+            c.execute("UPDATE keys SET models=?, models_ts=? WHERE id=?",
+                      (json.dumps(models), time.time(), kid))
+    return {"ok": bool(models), "models": models, "models_count": len(models)}
 
 
 # --------------------------------------------------------------------------- #
@@ -458,14 +545,19 @@ def pick_keys(wire: str) -> list[dict]:
 
 
 def log_event(**kw: Any) -> None:
+    pt = int(kw.get("prompt_tokens") or 0)
+    ct = int(kw.get("completion_tokens") or 0)
     with db() as c:
         c.execute("""INSERT INTO events(ts,provider,key_id,wire,model,status,ok,ms,
                      prompt_tokens,completion_tokens,error)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                   (time.time(), kw.get("provider", ""), kw.get("key_id", ""), kw.get("wire", ""),
                    kw.get("model", ""), kw.get("status", 0), int(bool(kw.get("ok"))),
-                   kw.get("ms", 0), kw.get("prompt_tokens", 0), kw.get("completion_tokens", 0),
-                   (kw.get("error") or "")[:400]))
+                   kw.get("ms", 0), pt, ct, (kw.get("error") or "")[:400]))
+        # lifetime per-key token counter (used vs. limit shown in the dashboard)
+        if kw.get("key_id") and (pt or ct):
+            c.execute("UPDATE keys SET tokens_used = COALESCE(tokens_used,0) + ? WHERE id=?",
+                      (pt + ct, kw["key_id"]))
 
 
 def cool_down(kid: str, reason: str) -> None:
