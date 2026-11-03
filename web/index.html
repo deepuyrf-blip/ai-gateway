@@ -213,6 +213,10 @@
         <b>Unified API key</b>
         <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Use this as the API key in every client. Rotating it invalidates the old one.</p>
         <div class="codebox"><pre class="box" id="uniKey"></pre><button class="sm copy" onclick="copyText(uniKey.textContent)">Copy</button></div>
+      <div class="card" style="padding:14px;margin-top:12px">
+        <h3 style="margin:0 0 10px;font-size:13.5px">Prompt compression</h3>
+        <div id="compressBox"></div>
+      </div>
         <div style="margin-top:12px" class="flex">
           <button class="sm" onclick="rotateKey()">Rotate key</button>
           <div class="spacer"></div>
@@ -437,7 +441,42 @@ function renderModels(){
       <tr><td class="mono">${esc(p)}/auto</td><td class="muted">${esc(p)} keys only</td></tr>`).join("");
 }
 
-function renderSettings(){ $("uniKey").textContent = STATE.unified_key; }
+let COMPRESS = {mode:"standard", modes:["off","lossless","standard","aggressive"]};
+
+async function loadCompression(){
+  try { COMPRESS = await api("/api/compression"); } catch(e) {}
+  renderCompression();
+}
+
+function renderCompression(){
+  const el = $("compressBox");
+  if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <select id="cmode" style="min-width:170px">
+        ${COMPRESS.modes.map(m=>`<option value="${m}" ${m===COMPRESS.mode?"selected":""}>${m}</option>`).join("")}
+      </select>
+      <button class="sm" onclick="saveCompression()">Save</button>
+      <span class="muted" style="font-size:11.5px">shrinks agent context before routing</span>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin:8px 0 0">
+      <b>off</b> no rewrite · <b>lossless</b> dedupe + whitespace ·
+      <b>standard</b> + tool-output filtering + stale file reads ·
+      <b>aggressive</b> + trims older turns
+    </p>`;
+}
+
+async function saveCompression(){
+  const mode = $("cmode").value;
+  await api("/api/compression", {method:"PUT", body: JSON.stringify({mode})});
+  COMPRESS.mode = mode;
+  toast(`Compression: ${mode}`);
+}
+
+function renderSettings(){
+  $("uniKey").textContent = STATE.unified_key;
+  loadCompression();
+}
 
 /* ---------- actions ---------- */
 function openAdd(pid){
