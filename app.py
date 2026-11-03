@@ -44,7 +44,7 @@ DB_PATH = DATA_DIR / "gateway.db"
 WEB_DIR = Path(__file__).parent / "web"
 PORT = int(os.environ.get("PORT", "7860"))
 HOST = os.environ.get("HOST", "0.0.0.0")
-COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "120"))
+COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "60"))
 QUOTA_COOLDOWN_SECONDS = int(os.environ.get("QUOTA_COOLDOWN_SECONDS", "900"))
 AUTH_COOLDOWN_SECONDS = int(os.environ.get("AUTH_COOLDOWN_SECONDS", "3600"))
 TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "120"))
@@ -786,6 +786,13 @@ def pick_keys(wire: str, model: str = "", size: int = 0) -> list[dict]:
     rows = [dict(r) for r in with_db("SELECT * FROM keys WHERE enabled=1 ORDER BY created")]
     now = time.time()
     alive = [r for r in rows if r["cooldown_until"] <= now]
+
+    # NEVER hand the caller an empty list. If every key is cooling (one flaky
+    # upstream cooling several keys at once), fall back to the ones whose
+    # cooldown ends soonest — a project must not stall because of a transient
+    # upstream outage. They are still scored lower (rate_limit_factor = 0.2).
+    if not alive and rows:
+        alive = sorted(rows, key=lambda r: (r.get("cooldown_until") or 0))[:2]
 
     # a key that returned 413 before gets skipped for big requests (Workers AI, etc.)
     if size and size > BIG_PAYLOAD:
