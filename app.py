@@ -172,6 +172,14 @@ def init_db() -> None:
                 c.execute(f"ALTER TABLE keys ADD COLUMN {col} {ddl}")
             except Exception:
                 pass
+        # backfill lifetime token counters from the event log (only where still 0)
+        try:
+            c.execute("""UPDATE keys SET tokens_used = COALESCE((
+                SELECT SUM(COALESCE(prompt_tokens,0)+COALESCE(completion_tokens,0))
+                FROM events WHERE events.key_id = keys.id), 0)
+                WHERE COALESCE(tokens_used,0) = 0""")
+        except Exception:
+            pass
 
 
 def setting(k: str, default: str = "") -> str:
