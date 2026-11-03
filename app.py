@@ -41,6 +41,8 @@ WEB_DIR = Path(__file__).parent / "web"
 PORT = int(os.environ.get("PORT", "7860"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "120"))
+QUOTA_COOLDOWN_SECONDS = int(os.environ.get("QUOTA_COOLDOWN_SECONDS", "900"))
+AUTH_COOLDOWN_SECONDS = int(os.environ.get("AUTH_COOLDOWN_SECONDS", "3600"))
 TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "120"))
 
 # --------------------------------------------------------------------------- #
@@ -600,9 +602,18 @@ def log_event(**kw: Any) -> None:
 
 
 def cool_down(kid: str, reason: str) -> None:
+    """Park a key for a while. Quota/rate-limit errors need a much longer rest than
+    a transient 5xx, otherwise we just hammer a provider that has nothing left."""
+    r = reason or ""
+    if r.startswith("429") or "quota" in r.lower() or "rate limit" in r.lower():
+        secs = QUOTA_COOLDOWN_SECONDS          # quota exhausted — wait it out
+    elif r.startswith(("401", "402", "403")):
+        secs = AUTH_COOLDOWN_SECONDS           # bad key — keep it out of rotation
+    else:
+        secs = COOLDOWN_SECONDS                # transient upstream error
     with db() as c:
         c.execute("UPDATE keys SET cooldown_until=?, failures=failures+1, last_error=? WHERE id=?",
-                  (time.time() + COOLDOWN_SECONDS, reason[:300], kid))
+                  (time.time() + secs, reason[:300], kid))
 
 
 def bump(kid: str) -> None:
