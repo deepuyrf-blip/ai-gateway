@@ -1287,6 +1287,36 @@ def api_compression_preview(body: dict, _: None = Depends(require_session)) -> d
             "preview": json.dumps(out)[:2000]}
 
 
+def ensure_openai_response(data: Any, model: str = "") -> Any:
+    """An Anthropic-wire upstream answers in Anthropic shape even when the caller
+    asked on the OpenAI wire. Normalise it so streaming (and clients) see text."""
+    if not isinstance(data, dict):
+        return data
+    if data.get("object") == "chat.completion":
+        return data
+    if data.get("type") == "message" or isinstance(data.get("content"), list):
+        parts = []
+        for blk in data.get("content") or []:
+            if isinstance(blk, dict) and blk.get("type") == "text":
+                parts.append(blk.get("text") or "")
+        text = "".join(parts)
+        u = data.get("usage") or {}
+        pt = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+        ct = int(u.get("output_tokens") or u.get("completion_tokens") or 0)
+        return {
+            "id": data.get("id") or ("chatcmpl-" + uuid.uuid4().hex[:10]),
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": data.get("model") or model or "auto",
+            "choices": [{"index": 0,
+                         "message": {"role": "assistant", "content": text},
+                         "finish_reason": data.get("stop_reason") or "stop"}],
+            "usage": {"prompt_tokens": pt, "completion_tokens": ct,
+                      "total_tokens": pt + ct},
+        }
+    return data
+
+
 @app.post("/v1/chat/completions")
 async def v1_chat(request: Request, _: str = Depends(require_unified)):
     body = await request.json()
@@ -1295,6 +1325,7 @@ async def v1_chat(request: Request, _: str = Depends(require_unified)):
     status, data = await call_upstream("openai", body)
     if status >= 400:
         return JSONResponse(data, status_code=status)
+    data = ensure_openai_response(data, body.get("model", "auto"))
     if not stream:
         resp = JSONResponse(data)
         if saved:
@@ -1308,8 +1339,11 @@ async def v1_chat(request: Request, _: str = Depends(require_unified)):
                 "object": "chat.completion.chunk", "created": int(time.time()),
                 "model": data.get("model", body.get("model", ""))}
         yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
-        if msg.get("content"):
-            yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': msg['content']}, 'finish_reason': None}]})}\n\n"
+        text = msg.get("content") or ""
+        if text:
+            step = 48
+            for i in range(0, len(text), step):
+                yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': text[i:i+step]}, 'finish_reason': None}]})}\n\n"
         yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': ch.get('finish_reason') or 'stop'}]})}\n\n"
         yield "data: [DONE]\n\n"
 
