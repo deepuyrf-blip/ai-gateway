@@ -370,7 +370,9 @@ _ICON_CACHE: dict[str, bytes] = {}
 def mobile_app() -> HTMLResponse:
     """Mobile-first chat PWA (installable from the phone browser)."""
     f = WEB_DIR / "app.html"
-    return HTMLResponse(f.read_text(encoding="utf-8") if f.exists() else "<h1>missing app.html</h1>")
+    html = f.read_text(encoding="utf-8") if f.exists() else "<h1>missing app.html</h1>"
+    # never cache: phones otherwise keep an old build after an update
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/app/manifest.webmanifest")
