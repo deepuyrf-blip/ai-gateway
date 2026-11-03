@@ -442,10 +442,19 @@ function renderModels(){
 }
 
 let COMPRESS = {mode:"standard", modes:["off","lossless","standard","aggressive"]};
+let ROUTING = {strategy:"balanced", strategies:["balanced","reliable","fastest","smartest"]};
 
 async function loadCompression(){
   try { COMPRESS = await api("/api/compression"); } catch(e) {}
+  try { ROUTING = await api("/api/routing"); } catch(e) {}
   renderCompression();
+}
+
+async function saveRouting(){
+  const strategy = $("rstrat").value;
+  await api("/api/routing", {method:"PUT", body: JSON.stringify({strategy})});
+  ROUTING.strategy = strategy;
+  toast(`Routing: ${strategy}`);
 }
 
 function renderCompression(){
@@ -463,6 +472,18 @@ function renderCompression(){
       <b>off</b> no rewrite · <b>lossless</b> dedupe + whitespace ·
       <b>standard</b> + tool-output filtering + stale file reads ·
       <b>aggressive</b> + trims older turns
+    </p>
+    <h3 style="margin:16px 0 8px;font-size:13.5px">Routing strategy</h3>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <select id="rstrat" style="min-width:170px">
+        ${(ROUTING.strategies||[]).map(m=>`<option value="${m}" ${m===ROUTING.strategy?"selected":""}>${m}</option>`).join("")}
+      </select>
+      <button class="sm" onclick="saveRouting()">Save</button>
+      <span class="muted" style="font-size:11.5px">how keys are ranked per request</span>
+    </div>
+    <p class="muted" style="font-size:11.5px;margin:8px 0 0">
+      <b>balanced</b> reliability+speed+intelligence · <b>reliable</b> prefers proven keys ·
+      <b>fastest</b> prefers low latency · <b>smartest</b> prefers bigger models
     </p>`;
 }
 
