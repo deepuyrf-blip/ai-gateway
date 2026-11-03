@@ -117,6 +117,8 @@
   <input id="keyIn" placeholder="sk-gw-..." autocomplete="off" autocapitalize="off" spellcheck="false">
   <input id="baseIn" placeholder="https://gw.11lab.bond" autocomplete="off" autocapitalize="off" spellcheck="false">
   <button onclick="saveKey()">Connect</button>
+  <button onclick="testConn()" style="margin-top:8px;background:var(--panel2);color:var(--txt);border:1px solid var(--line)">Test connection</button>
+  <p id="testOut" style="margin-top:12px;font-size:12.5px;color:var(--mut)"></p>
   <p style="margin-top:14px;font-size:12px">Key: <b>gw.11lab.bond</b> → Settings → Unified key</p>
 </div>
 
@@ -180,6 +182,36 @@ function saveKey(){
   boot();
 }
 
+function withTimeout(ms){
+  const c = new AbortController();
+  const t = setTimeout(()=>c.abort(), ms);
+  return {signal: c.signal, done: ()=>clearTimeout(t)};
+}
+
+function netErr(e, url){
+  if (e && e.name === 'AbortError') return `Timed out — ${url}`;
+  return `${(e && e.message) || e} — ${url}`;
+}
+
+async function testConn(){
+  const k = $('keyIn').value.trim() || LS.k;
+  let b = ($('baseIn').value.trim() || location.origin).replace(/\/+$/, '');
+  const out = $('testOut');
+  if (!k){ out.textContent = '⚠ Key dalo pehle'; return; }
+  out.textContent = 'testing…';
+  const url = b + '/v1/models';
+  try{
+    const t = withTimeout(25000);
+    const r = await fetch(url, {headers:{Authorization:'Bearer ' + k}, signal: t.signal});
+    t.done();
+    if (!r.ok){ out.textContent = `⚠ HTTP ${r.status} — key galat ho sakti hai`; return; }
+    const d = await r.json();
+    out.textContent = `✅ Connected — ${(d.data||[]).length} models`;
+  }catch(e){
+    out.textContent = '❌ ' + netErr(e, url);
+  }
+}
+
 function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -208,15 +240,20 @@ function scrollDown(){ const s = $('scroll'); s.scrollTop = s.scrollHeight; }
 function setStatus(t){ $('status').textContent = t; }
 
 async function loadModels(){
+  const url = LS.b + '/v1/models';
   try{
-    const r = await fetch(LS.b + '/v1/models', {headers:{Authorization:'Bearer ' + LS.k}});
+    const t = withTimeout(30000);
+    const r = await fetch(url, {headers:{Authorization:'Bearer ' + LS.k}, signal: t.signal});
+    t.done();
+    if (!r.ok){ setStatus('models HTTP ' + r.status); return; }
     const d = await r.json();
     const ids = (d.data || []).map(x=>x.id).filter(Boolean);
     const sel = $('model');
     const wanted = ['auto', ...ids.filter(x=>!x.endsWith('/auto'))];
     sel.innerHTML = wanted.slice(0,300).map(id=>`<option ${id===LS.m?'selected':''}>${esc(id)}</option>`).join('');
     if (wanted.length) setStatus(ids.length + ' models');
-  }catch(e){ setStatus('models unavailable'); }
+    else setStatus('no models');
+  }catch(e){ setStatus('models: ' + netErr(e, url).slice(0,60)); }
 }
 function pickModel(v){ LS.m = v; }
 
@@ -224,6 +261,7 @@ function boot(){
   if (!LS.k){ $('setup').classList.remove('hide'); return; }
   $('setup').classList.add('hide');
   $('baseIn').value = LS.b;
+  setStatus(LS.b.replace('https://',''));
   paint(); loadModels();
 }
 
@@ -245,15 +283,38 @@ async function send(){
     messages: msgs.slice(0,-1).map(m=>({role:m.role, content:m.content}))
   };
 
+  const url = LS.b + '/v1/chat/completions';
   try{
-    const res = await fetch(LS.b + '/v1/chat/completions', {
-      method:'POST',
-      headers:{'content-type':'application/json', Authorization:'Bearer ' + LS.k},
-      body: JSON.stringify(body)
-    });
+    const t = withTimeout(180000);
+    let res;
+    try{
+      res = await fetch(url, {
+        method:'POST',
+        headers:{'content-type':'application/json', Authorization:'Bearer ' + LS.k},
+        body: JSON.stringify(body), signal: t.signal
+      });
+    }catch(e){
+      // streaming blocked on some mobile networks — retry without stream
+      const t2 = withTimeout(180000);
+      const b2 = {...body, stream:false};
+      res = await fetch(url, {
+        method:'POST',
+        headers:{'content-type':'application/json', Authorization:'Bearer ' + LS.k},
+        body: JSON.stringify(b2), signal: t2.signal
+      });
+      t2.done();
+      if (res.ok){
+        const j = await res.json();
+        const txt = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content)
+                  || (j.content && j.content[0] && j.content[0].text) || '(empty)';
+        msgs[idx].content = txt; bubble.innerHTML = md(txt); LS.c = msgs;
+        setStatus('done (non-stream)'); return;
+      }
+    }
+    t.done();
     if (!res.ok){
-      const t = await res.text();
-      msgs[idx].content = '⚠ ' + res.status + ' — ' + t.slice(0,300);
+      const tx = await res.text();
+      msgs[idx].content = '⚠ HTTP ' + res.status + ' — ' + tx.slice(0,300);
       bubble.innerHTML = md(msgs[idx].content); return;
     }
     if (!res.body){ msgs[idx].content = '⚠ no stream'; return; }
@@ -288,7 +349,7 @@ async function send(){
     LS.c = msgs;
     setStatus('done');
   }catch(e){
-    msgs[idx].content = '⚠ ' + (e.message || e);
+    msgs[idx].content = '⚠ ' + netErr(e, url);
     bubble.innerHTML = md(msgs[idx].content);
     setStatus('error');
   }finally{
@@ -302,7 +363,6 @@ const ta = $('input');
 ta.addEventListener('input', ()=>{ ta.style.height='auto'; ta.style.height = Math.min(ta.scrollHeight,140)+'px'; });
 ta.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
 
-if ('serviceWorker' in navigator){ navigator.serviceWorker.register('/app/sw.js').catch(()=>{}); }
 boot();
 </script>
 </body>
