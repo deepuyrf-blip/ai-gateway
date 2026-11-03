@@ -1019,7 +1019,7 @@ def rank_models(mids: list[str]) -> list[str]:
         return list(pool)
 
 
-async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
+async def call_upstream(wire: str, payload: dict, _allow_model_fallback: bool = True) -> tuple[int, dict]:
     """Try each key in order until one answers. Returns (status, body)."""
     model = payload.get("model") or "auto"
     try:
