@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+
+import compress as compressor
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -953,15 +955,68 @@ def anthropic_sse(payload: dict) -> list[str]:
 # --------------------------------------------------------------------------- #
 # client-facing endpoints
 # --------------------------------------------------------------------------- #
+COMPRESS_MODES = ("off", "lossless", "standard", "aggressive")
+
+
+def compress_mode(request: Request | None = None) -> str:
+    """Per-request header wins when it *lowers* the mode; else the saved setting."""
+    configured = (setting("compression_mode") or os.environ.get("GW_COMPRESSION", "standard")).lower()
+    if configured not in COMPRESS_MODES:
+        configured = "standard"
+    if request is not None:
+        hdr = (request.headers.get("x-gw-compress") or request.headers.get("x-freellm-compress") or "").lower()
+        hdr = hdr.split(";")[0].strip()
+        if hdr in ("on",):
+            return configured
+        if hdr in COMPRESS_MODES:
+            if hdr == "off":
+                return "off"
+            if COMPRESS_MODES.index(hdr) <= COMPRESS_MODES.index(configured):
+                return hdr
+    return configured
+
+
+@app.get("/api/compression")
+def api_compression_get(_: None = Depends(require_session)) -> dict:
+    return {"mode": compress_mode(), "modes": list(COMPRESS_MODES),
+            "env_default": os.environ.get("GW_COMPRESSION", "standard")}
+
+
+@app.put("/api/compression")
+def api_compression_put(body: dict, _: None = Depends(require_session)) -> dict:
+    mode = str(body.get("mode", "")).lower()
+    if mode not in COMPRESS_MODES:
+        raise HTTPException(400, "mode must be one of " + ", ".join(COMPRESS_MODES))
+    set_setting("compression_mode", mode)
+    return {"ok": True, "mode": mode}
+
+
+@app.post("/api/compression/preview")
+def api_compression_preview(body: dict, _: None = Depends(require_session)) -> dict:
+    """Dry run: show what compression would do to a request body."""
+    sample = body.get("body") or {"messages": [{"role": "user", "content": body.get("text", "hello")}]}
+    mode = str(body.get("mode") or compress_mode()).lower()
+    out, saved, eff = compressor.compress_body(sample, mode)
+    return {"mode": eff, "chars_before": len(json.dumps(sample)),
+            "chars_after": len(json.dumps(out)), "chars_saved": saved,
+            "est_tokens_before": compressor.estimate_tokens(json.dumps(sample)),
+            "est_tokens_after": compressor.estimate_tokens(json.dumps(out)),
+            "preview": json.dumps(out)[:2000]}
+
+
 @app.post("/v1/chat/completions")
 async def v1_chat(request: Request, _: str = Depends(require_unified)):
     body = await request.json()
     stream = bool(body.get("stream"))
+    body, saved, cmode = compressor.compress_body(body, compress_mode(request))
     status, data = await call_upstream("openai", body)
     if status >= 400:
         return JSONResponse(data, status_code=status)
     if not stream:
-        return JSONResponse(data)
+        resp = JSONResponse(data)
+        if saved:
+            resp.headers["X-GW-Compressed"] = f"{cmode}; saved~={saved}"
+        return resp
 
     async def gen():
         ch = (data.get("choices") or [{}])[0]
@@ -981,6 +1036,7 @@ async def v1_chat(request: Request, _: str = Depends(require_unified)):
 @app.post("/v1/messages")
 async def v1_messages(request: Request, _: str = Depends(require_unified)):
     req = await request.json()
+    req, saved, cmode = compressor.compress_body(req, compress_mode(request))
     model = req.get("model", "claude-3-5-sonnet-latest")
     keys = pick_keys("anthropic")
     native = [k for k in keys if PROVIDER_MAP[k["provider"]]["type"] == "anthropic"]
