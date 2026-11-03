@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -482,24 +483,39 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
     prov = PROVIDER_MAP[key["provider"]]
     base = (key["base_override"] or prov["base"]).rstrip("/")
     ok, status, body = False, 0, ""
-    try:
-        if prov["type"] == "anthropic":
-            url = base + "/v1/messages"
-            headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01",
-                       "content-type": "application/json"}
-            payload = {"model": resolve_model(key, "claude-3-5-haiku-latest"), "max_tokens": 8,
+    if prov["type"] == "anthropic":
+        url = base + "/v1/messages"
+        headers = {"x-api-key": key["secret"], "anthropic-version": "2023-06-01",
+                   "content-type": "application/json"}
+        first = resolve_model(key, "claude-3-5-haiku-latest")
+    else:
+        url = base + "/chat/completions"
+        headers = {"Authorization": f"Bearer {key['secret']}", "content-type": "application/json"}
+        first = resolve_model(key)
+
+    candidates = [first]
+    for cand in rank_models(_key_models(key)):
+        if cand not in candidates:
+            candidates.append(cand)
+    candidates = candidates[:5]
+
+    for cand in candidates:
+        try:
+            payload = {"model": cand, "max_tokens": 8,
                        "messages": [{"role": "user", "content": "ping"}]}
-        else:
-            url = base + "/chat/completions"
-            headers = {"Authorization": f"Bearer {key['secret']}", "content-type": "application/json"}
-            payload = {"model": resolve_model(key), "max_tokens": 8,
-                       "messages": [{"role": "user", "content": "ping"}]}
-        async with httpx.AsyncClient(timeout=30) as cx:
-            r = await cx.post(url, headers=headers, json=payload)
-        status, body = r.status_code, r.text[:400]
-        ok = status < 400
-    except Exception as e:
-        body = f"{type(e).__name__}: {e}"[:300]
+            async with httpx.AsyncClient(timeout=30) as cx:
+                r = await cx.post(url, headers=headers, json=payload)
+            status, body = r.status_code, r.text[:400]
+            ok = status < 400
+            if ok:
+                # remember the model that actually worked, so routing uses it
+                with db() as c:
+                    c.execute("UPDATE keys SET models_ts=? WHERE id=?", (time.time(), key["id"]))
+                key["_working_model"] = cand
+                break
+        except Exception as e:
+            status, body = 0, f"{type(e).__name__}: {e}"[:300]
+            ok = False
 
     models = await fetch_provider_models(key) if with_models else []
 
@@ -625,12 +641,26 @@ def resolve_model(key: dict, model: str = "") -> str:
     if "openrouter.ai" in base:
         return "auto"                      # OpenRouter has a real "auto" route
     if mids:
-        for pref in PREF_SUBSTR:
-            for x in mids:
-                if pref in x.lower():
-                    return x
-        return mids[0]
+        return rank_models(mids)[0]
     return m or "auto"
+
+
+def rank_models(mids: list[str]) -> list[str]:
+    """Order candidate models: preferred families first, then newest version first.
+
+    Providers retire models silently (e.g. Google dropped gemini-2.5-flash for new
+    users), so picking the highest version we can see is the safest default.
+    """
+    def score(name: str):
+        low = name.lower()
+        pref = any(p in low for p in PREF_SUBSTR)
+        nums = [int(n) for n in re.findall(r"\d+", low)[:3]]
+        return (pref, nums, -len(low))
+
+    try:
+        return sorted(mids, key=score, reverse=True)
+    except Exception:
+        return list(mids)
 
 
 async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
