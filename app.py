@@ -699,7 +699,13 @@ def resolve_url(key: dict) -> tuple[str, dict]:
     return base + "/chat/completions", {"Authorization": f"Bearer {secret}"}
 
 
-CF_DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+CF_DEFAULT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# verified working on Workers AI (others are deprecated / not enabled per account)
+CF_PREFERRED = (
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "@cf/meta/llama-3.1-8b-instruct-fast",
+    "@cf/qwen/qwen2.5-coder-32b-instruct",
+)
 
 PREF_SUBSTR = ("flash", "mini", "haiku", "lite", "small", "8b", "turbo", "fast")
 
@@ -723,10 +729,15 @@ def resolve_model(key: dict, model: str = "") -> str:
     mids = _key_models(key)
     if "openrouter.ai" in base:
         return "auto"                      # OpenRouter has a real "auto" route
+    if prov["id"] == "cloudflare":
+        for pref in CF_PREFERRED:          # Workers AI rejects "auto"
+            if not mids or pref in mids:
+                return pref
+        if mids:
+            return rank_models(mids)[0]
+        return CF_DEFAULT_MODEL
     if mids:
         return rank_models(mids)[0]
-    if prov["id"] == "cloudflare":
-        return CF_DEFAULT_MODEL            # Workers AI rejects "auto"
     return m or "auto"
 
 
