@@ -405,24 +405,43 @@ def api_state(_: None = Depends(require_session)) -> dict:
     }
 
 
+async def cf_account_id(token: str) -> str:
+    """Cloudflare's /accounts endpoint resolves the account id from the token alone."""
+    try:
+        async with httpx.AsyncClient(timeout=20) as cx:
+            r = await cx.get("https://api.cloudflare.com/client/v4/accounts",
+                             headers={"Authorization": f"Bearer {token}"})
+        d = r.json()
+        if d.get("success") and d.get("result"):
+            return d["result"][0]["id"]
+    except Exception:
+        pass
+    return ""
+
+
 @app.post("/api/keys")
 async def api_add_key(body: KeyIn, _: None = Depends(require_session)) -> dict:
     if body.provider not in PROVIDER_MAP:
         raise HTTPException(400, "unknown provider")
     if not body.secret.strip():
         raise HTTPException(400, "secret required")
-    # providers whose base URL needs extra bits baked into the secret
-    if body.provider == "cloudflare" and ":" not in body.secret:
-        raise HTTPException(
-            400,
-            "Cloudflare needs the key as  account_id:token  "
-            "(find the account id on the Workers AI page, then a colon, then the API token)")
+    # Cloudflare: auto-resolve the account id from the token (no manual id needed)
+    secret = body.secret.strip()
+    if body.provider == "cloudflare" and ":" not in secret:
+        acct = await cf_account_id(secret)
+        if not acct:
+            raise HTTPException(
+                400,
+                "Could not detect your Cloudflare account from that token. "
+                "Either paste it as  account_id:token  or use a token with "
+                "Workers AI + Account Read permission.")
+        secret = f"{acct}:{secret}"
     if body.provider in ("custom_openai", "custom_anthropic") and not body.base_override.strip():
         raise HTTPException(400, f"{body.provider} needs a base URL (e.g. https://api.example.com)")
     kid = uuid.uuid4().hex[:12]
     with db() as c:
         c.execute("INSERT INTO keys(id,provider,label,secret,base_override,created) VALUES(?,?,?,?,?,?)",
-                  (kid, body.provider, body.label, body.secret.strip(), body.base_override.strip(), time.time()))
+                  (kid, body.provider, body.label, secret, body.base_override.strip(), time.time()))
     # check health + pull the model list in the background so the UI shows a dot
     rows = with_db("SELECT * FROM keys WHERE id=?", (kid,))
     if rows:
