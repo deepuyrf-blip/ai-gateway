@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f0e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Claude">
+<link rel="manifest" href="/app/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/app/icon.png">
+<title>Claude</title>
+<style>
+  :root{
+    --bg:#0f0e0c; --panel:#171613; --panel2:#1e1c18; --line:#2a2723;
+    --txt:#f5f2ec; --mut:#a29b8e; --accent:#d97757; --accent2:#e8956f;
+    --ok:#4ade80; --bad:#f87171;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    display:flex; flex-direction:column; overscroll-behavior:none;
+  }
+  header{
+    position:sticky; top:0; z-index:10;
+    padding:calc(var(--safe-t) + 10px) 14px 10px;
+    background:rgba(15,14,12,.92); backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:10px;
+  }
+  .brand{font-weight:600; letter-spacing:.2px; display:flex; align-items:center; gap:8px}
+  .star{width:20px;height:20px;color:var(--accent)}
+  select{
+    flex:1; min-width:0; background:var(--panel2); color:var(--txt);
+    border:1px solid var(--line); border-radius:10px; padding:8px 10px;
+    font:inherit; font-size:13px; appearance:none;
+  }
+  .iconbtn{
+    background:var(--panel2); border:1px solid var(--line); color:var(--txt);
+    border-radius:10px; width:38px; height:38px; display:grid; place-items:center;
+    font-size:16px; cursor:pointer; flex:0 0 auto;
+  }
+  main{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:18px 14px 8px}
+  .hero{padding:14vh 10px 0; text-align:center}
+  .hero .big{font-size:26px; font-weight:600; margin-bottom:6px}
+  .hero .big .star{width:26px;height:26px;vertical-align:-3px;margin-right:6px}
+  .hero p{color:var(--mut); margin:0; font-size:13.5px}
+  .msg{margin:0 0 18px; display:flex; gap:10px}
+  .msg .who{
+    flex:0 0 26px; width:26px; height:26px; border-radius:8px; display:grid;
+    place-items:center; font-size:12px; font-weight:700;
+  }
+  .msg.user .who{background:var(--panel2); color:var(--mut)}
+  .msg.bot .who{background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#1a1207}
+  .bubble{flex:1; min-width:0; white-space:pre-wrap; word-wrap:break-word}
+  .bubble code{
+    background:var(--panel2); border:1px solid var(--line); border-radius:5px;
+    padding:1px 5px; font-size:13px; font-family:ui-monospace,Menlo,monospace;
+  }
+  .bubble pre{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:12px; overflow-x:auto; font-size:12.5px; margin:8px 0;
+  }
+  .bubble pre code{background:none;border:0;padding:0}
+  .meta{color:var(--mut); font-size:11px; margin-top:6px}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);
+    vertical-align:-2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  footer{
+    position:sticky; bottom:0; background:rgba(15,14,12,.96);
+    backdrop-filter:blur(12px); border-top:1px solid var(--line);
+    padding:10px 12px calc(10px + var(--safe-b));
+  }
+  .composer{
+    display:flex; align-items:flex-end; gap:8px; background:var(--panel2);
+    border:1px solid var(--line); border-radius:16px; padding:8px 8px 8px 14px;
+  }
+  textarea{
+    flex:1; background:none; border:0; color:var(--txt); font:inherit;
+    resize:none; outline:none; max-height:140px; padding:6px 0; line-height:1.45;
+  }
+  textarea::placeholder{color:var(--mut)}
+  .send{
+    width:36px;height:36px;border-radius:12px;border:0;flex:0 0 auto;
+    background:var(--accent); color:#1a1207; font-size:17px; font-weight:700;
+    display:grid; place-items:center; cursor:pointer;
+  }
+  .send:disabled{opacity:.4}
+  .row{display:flex; gap:8px; margin-top:8px; font-size:11.5px; color:var(--mut);
+       align-items:center; justify-content:space-between}
+  .link{color:var(--accent); text-decoration:none}
+  /* key screen */
+  #setup{position:fixed; inset:0; background:var(--bg); z-index:50;
+    display:flex; flex-direction:column; justify-content:center; padding:28px}
+  #setup h1{font-size:22px; margin:0 0 6px}
+  #setup p{color:var(--mut); font-size:13.5px; margin:0 0 20px}
+  #setup input{
+    width:100%; background:var(--panel2); border:1px solid var(--line);
+    color:var(--txt); border-radius:12px; padding:14px; font:inherit; margin-bottom:10px;
+  }
+  #setup button{
+    width:100%; background:var(--accent); color:#1a1207; border:0;
+    border-radius:12px; padding:14px; font:inherit; font-weight:700; font-size:15px;
+  }
+  .hide{display:none !important}
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <h1><span class="star">✳</span> Connect your gateway</h1>
+  <p>Paste the unified key from your gateway dashboard. It is stored only on this device.</p>
+  <input id="keyIn" placeholder="sk-gw-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+  <input id="baseIn" placeholder="https://gw.11lab.bond" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button onclick="saveKey()">Connect</button>
+  <p style="margin-top:14px;font-size:12px">Key: <b>gw.11lab.bond</b> → Settings → Unified key</p>
+</div>
+
+<header>
+  <div class="brand"><svg class="star" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.4L21 10.6l-6.8 2.2L12 19.2 9.8 12.8 3 10.6l6.8-2.2z"/></svg></div>
+  <select id="model" onchange="pickModel(this.value)"></select>
+  <button class="iconbtn" onclick="newChat()" title="New chat">＋</button>
+</header>
+
+<main id="scroll">
+  <div class="hero" id="hero">
+    <div class="big"><span class="star">✳</span><span id="greet">Hello</span></div>
+    <p>Ask anything — your gateway picks the model.</p>
+  </div>
+  <div id="list"></div>
+</main>
+
+<footer>
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="How can I help you today?"></textarea>
+    <button class="send" id="send" onclick="send()">↑</button>
+  </div>
+  <div class="row">
+    <span id="status">ready</span>
+    <a class="link" href="#" onclick="reset();return false">disconnect</a>
+  </div>
+</footer>
+
+<script>
+const LS = {
+  get k(){ return localStorage.getItem('gw_key') || ''; },
+  set k(v){ localStorage.setItem('gw_key', v); },
+  get b(){ return localStorage.getItem('gw_base') || ''; },
+  set b(v){ localStorage.setItem('gw_base', v); },
+  get m(){ return localStorage.getItem('gw_model') || 'auto'; },
+  set m(v){ localStorage.setItem('gw_model', v); },
+  get c(){ try{ return JSON.parse(localStorage.getItem('gw_chat')||'[]'); }catch(e){ return []; } },
+  set c(v){ localStorage.setItem('gw_chat', JSON.stringify(v.slice(-40))); }
+};
+
+const $ = id => document.getElementById(id);
+let msgs = LS.c, busy = false;
+
+function greet(){
+  const h = new Date().getHours();
+  $('greet').textContent = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+}
+greet();
+
+function reset(){
+  localStorage.removeItem('gw_key'); localStorage.removeItem('gw_chat');
+  msgs = []; location.reload();
+}
+
+function saveKey(){
+  const k = $('keyIn').value.trim();
+  let b = $('baseIn').value.trim() || location.origin;
+  b = b.replace(/\/+$/, '');
+  if (!k) return alert('Key chahiye');
+  LS.k = k; LS.b = b;
+  boot();
+}
+
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function md(s){
+  let h = esc(s);
+  h = h.replace(/```([\s\S]*?)```/g, (m, code) => '<pre><code>' + code.trim() + '</code></pre>');
+  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  return h;
+}
+
+function paint(){
+  const list = $('list');
+  if (!msgs.length){ $('hero').classList.remove('hide'); list.innerHTML = ''; return; }
+  $('hero').classList.add('hide');
+  list.innerHTML = msgs.map((m,i)=>`
+    <div class="msg ${m.role==='user'?'user':'bot'}">
+      <div class="who">${m.role==='user'?'you':'✳'}</div>
+      <div class="bubble" id="b${i}">${md(m.content)}</div>
+    </div>`).join('');
+  scrollDown();
+}
+
+function scrollDown(){ const s = $('scroll'); s.scrollTop = s.scrollHeight; }
+
+function setStatus(t){ $('status').textContent = t; }
+
+async function loadModels(){
+  try{
+    const r = await fetch(LS.b + '/v1/models', {headers:{Authorization:'Bearer ' + LS.k}});
+    const d = await r.json();
+    const ids = (d.data || []).map(x=>x.id).filter(Boolean);
+    const sel = $('model');
+    const wanted = ['auto', ...ids.filter(x=>!x.endsWith('/auto'))];
+    sel.innerHTML = wanted.slice(0,300).map(id=>`<option ${id===LS.m?'selected':''}>${esc(id)}</option>`).join('');
+    if (wanted.length) setStatus(ids.length + ' models');
+  }catch(e){ setStatus('models unavailable'); }
+}
+function pickModel(v){ LS.m = v; }
+
+function boot(){
+  if (!LS.k){ $('setup').classList.remove('hide'); return; }
+  $('setup').classList.add('hide');
+  $('baseIn').value = LS.b;
+  paint(); loadModels();
+}
+
+async function send(){
+  const ta = $('input');
+  const text = ta.value.trim();
+  if (!text || busy) return;
+  ta.value = ''; ta.style.height = 'auto';
+  msgs.push({role:'user', content:text});
+  msgs.push({role:'assistant', content:''});
+  paint();
+  const idx = msgs.length - 1;
+  const bubble = document.getElementById('b' + idx);
+  busy = true; $('send').disabled = true; setStatus('thinking…');
+
+  const body = {
+    model: LS.m || 'auto',
+    stream: true,
+    messages: msgs.slice(0,-1).map(m=>({role:m.role, content:m.content}))
+  };
+
+  try{
+    const res = await fetch(LS.b + '/v1/chat/completions', {
+      method:'POST',
+      headers:{'content-type':'application/json', Authorization:'Bearer ' + LS.k},
+      body: JSON.stringify(body)
+    });
+    if (!res.ok){
+      const t = await res.text();
+      msgs[idx].content = '⚠ ' + res.status + ' — ' + t.slice(0,300);
+      bubble.innerHTML = md(msgs[idx].content); return;
+    }
+    if (!res.body){ msgs[idx].content = '⚠ no stream'; return; }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', acc = '';
+    const comp = res.headers.get('X-GW-Compressed');
+    if (comp) setStatus('streaming · compressed');
+    else setStatus('streaming…');
+
+    while (true){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split('\n');
+      buf = parts.pop();
+      for (const line of parts){
+        const l = line.trim();
+        if (!l.startsWith('data:')) continue;
+        const payload = l.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        try{
+          const j = JSON.parse(payload);
+          const d = j.choices?.[0]?.delta?.content || '';
+          if (d){ acc += d; msgs[idx].content = acc; bubble.innerHTML = md(acc) + '<span class="cursor"></span>'; scrollDown(); }
+        }catch(e){}
+      }
+    }
+    msgs[idx].content = acc || '(empty response)';
+    bubble.innerHTML = md(msgs[idx].content);
+    LS.c = msgs;
+    setStatus('done');
+  }catch(e){
+    msgs[idx].content = '⚠ ' + (e.message || e);
+    bubble.innerHTML = md(msgs[idx].content);
+    setStatus('error');
+  }finally{
+    busy = false; $('send').disabled = false;
+  }
+}
+
+function newChat(){ msgs = []; LS.c = []; paint(); setStatus('new chat'); }
+
+const ta = $('input');
+ta.addEventListener('input', ()=>{ ta.style.height='auto'; ta.style.height = Math.min(ta.scrollHeight,140)+'px'; });
+ta.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+
+if ('serviceWorker' in navigator){ navigator.serviceWorker.register('/app/sw.js').catch(()=>{}); }
+boot();
+</script>
+</body>
+</html>
