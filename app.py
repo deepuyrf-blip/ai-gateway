@@ -44,9 +44,9 @@ DB_PATH = DATA_DIR / "gateway.db"
 WEB_DIR = Path(__file__).parent / "web"
 PORT = int(os.environ.get("PORT", "7860"))
 HOST = os.environ.get("HOST", "0.0.0.0")
-COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "60"))
-QUOTA_COOLDOWN_SECONDS = int(os.environ.get("QUOTA_COOLDOWN_SECONDS", "900"))
-AUTH_COOLDOWN_SECONDS = int(os.environ.get("AUTH_COOLDOWN_SECONDS", "3600"))
+COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "20"))
+QUOTA_COOLDOWN_SECONDS = int(os.environ.get("QUOTA_COOLDOWN_SECONDS", "45"))
+AUTH_COOLDOWN_SECONDS = int(os.environ.get("AUTH_COOLDOWN_SECONDS", "300"))
 TIMEOUT = float(os.environ.get("UPSTREAM_TIMEOUT", "120"))
 
 # --------------------------------------------------------------------------- #
@@ -903,10 +903,20 @@ def log_event(**kw: Any) -> None:
                       (pt + ct, kw["key_id"]))
 
 
+def cooling_enabled() -> bool:
+    return (setting("cooling_enabled") or "1") != "0"
+
+
 def cool_down(kid: str, reason: str) -> None:
-    """Park a key for a while. Quota/rate-limit errors need a much longer rest than
-    a transient 5xx, otherwise we just hammer a provider that has nothing left."""
+    """Park a key briefly. Short by design: a relay saying 'all models exhausted'
+    recovers in seconds, and a permanently cooling key stalls the whole project."""
     r = reason or ""
+    if not cooling_enabled():
+        # cooling disabled — record the failure but keep the key in rotation
+        with db() as c:
+            c.execute("UPDATE keys SET failures=failures+1, last_error=? WHERE id=?",
+                      (r[:300], kid))
+        return
     if r.startswith("429") or "quota" in r.lower() or "rate limit" in r.lower():
         secs = QUOTA_COOLDOWN_SECONDS          # quota exhausted — wait it out
     elif r.startswith(("401", "402", "403")):
@@ -1210,6 +1220,28 @@ def compress_mode(request: Request | None = None) -> str:
             if COMPRESS_MODES.index(hdr) <= COMPRESS_MODES.index(configured):
                 return hdr
     return configured
+
+
+@app.get("/api/cooling")
+def api_cooling_get(_: None = Depends(require_session)) -> dict:
+    return {"enabled": cooling_enabled(),
+            "transient_s": COOLDOWN_SECONDS,
+            "quota_s": QUOTA_COOLDOWN_SECONDS,
+            "auth_s": AUTH_COOLDOWN_SECONDS}
+
+
+@app.put("/api/cooling")
+def api_cooling_put(body: dict, _: None = Depends(require_session)) -> dict:
+    set_setting("cooling_enabled", "1" if body.get("enabled") else "0")
+    return {"ok": True, "enabled": cooling_enabled()}
+
+
+@app.post("/api/cooling/clear")
+def api_cooling_clear(_: None = Depends(require_session)) -> dict:
+    """Un-park every key right now."""
+    with db() as c:
+        c.execute("UPDATE keys SET cooldown_until=0")
+    return {"ok": True}
 
 
 @app.get("/api/routing")
