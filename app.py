@@ -542,11 +542,26 @@ async def api_key_models(kid: str, _: None = Depends(require_session)) -> dict:
 # --------------------------------------------------------------------------- #
 # routing core
 # --------------------------------------------------------------------------- #
-def pick_keys(wire: str) -> list[dict]:
-    """Enabled, not-cooling keys, preferring providers that speak this wire."""
+def _key_models(row: dict) -> list[str]:
+    try:
+        return json.loads(row.get("models") or "[]") or []
+    except Exception:
+        return []
+
+
+def pick_keys(wire: str, model: str = "") -> list[dict]:
+    """Enabled, not-cooling keys. Prefer keys that actually serve the asked model."""
     rows = [dict(r) for r in with_db("SELECT * FROM keys WHERE enabled=1 ORDER BY created")]
     now = time.time()
     alive = [r for r in rows if r["cooldown_until"] <= now]
+
+    m = (model or "").strip()
+    if m and m != "auto" and not m.endswith("/auto"):
+        with_model = [r for r in alive if m in _key_models(r)]
+        unknown = [r for r in alive if not _key_models(r)]
+        without = [r for r in alive if m not in _key_models(r) and _key_models(r)]
+        alive = with_model + unknown + without
+
     same = [r for r in alive if PROVIDER_MAP[r["provider"]]["type"] == wire]
     other = [r for r in alive if r not in same]
     return same + other
@@ -594,11 +609,11 @@ def resolve_url(key: dict) -> tuple[str, dict]:
 
 async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
     """Try each key in order until one answers. Returns (status, body)."""
-    keys = pick_keys(wire)
+    model = payload.get("model") or "auto"
+    keys = pick_keys(wire, model)
     if not keys:
         return 503, {"error": {"message": "no keys configured — add a provider key in the dashboard"}}
 
-    model = payload.get("model") or "auto"
     last_err = ""
     for key in keys:
         prov = PROVIDER_MAP[key["provider"]]
@@ -810,9 +825,16 @@ async def v1_messages(request: Request, _: str = Depends(require_unified)):
 
 @app.get("/v1/models")
 def v1_models(_: str = Depends(require_unified)) -> dict:
+    """Routing ids + every real model discovered on the configured keys."""
     data = [{"id": "auto", "object": "model", "owned_by": "gateway"}]
     for k in with_db("SELECT DISTINCT provider FROM keys WHERE enabled=1"):
         data.append({"id": f"{k['provider']}/auto", "object": "model", "owned_by": k["provider"]})
+    seen = {d["id"] for d in data}
+    for row in with_db("SELECT provider, models FROM keys WHERE enabled=1"):
+        for mid in _key_models(dict(row)):
+            if mid and mid not in seen:
+                seen.add(mid)
+                data.append({"id": mid, "object": "model", "owned_by": row["provider"]})
     return {"object": "list", "data": data}
 
 
