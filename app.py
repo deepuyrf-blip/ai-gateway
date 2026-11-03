@@ -1322,6 +1322,11 @@ async def v1_chat(request: Request, _: str = Depends(require_unified)):
     body = await request.json()
     stream = bool(body.get("stream"))
     body, saved, cmode = compressor.compress_body(body, compress_mode(request))
+    # We synthesise the SSE stream ourselves, so the upstream must answer with a
+    # normal JSON body. Asking it to stream returned raw SSE that we then tried to
+    # parse as JSON — which is why clients saw an empty delta.
+    body.pop("stream", None)
+    body.pop("stream_options", None)
     status, data = await call_upstream("openai", body)
     if status >= 400:
         return JSONResponse(data, status_code=status)
