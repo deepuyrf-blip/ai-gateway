@@ -1085,6 +1085,20 @@ async def call_upstream(wire: str, payload: dict) -> tuple[int, dict]:
             return r.status_code, data
         last_err = f"{r.status_code} {r.text[:150]}"
 
+    # A specific model can be rate-limited or retired while the provider itself is
+    # fine. Rather than fail the user, retry once on "auto" and let the router pick.
+    if (_allow_model_fallback
+            and str(model) not in ("", "auto")
+            and not str(model).endswith("/auto")
+            and any(t in last_err for t in ("429", "404", "400", "rate_limit", "exhausted",
+                                            "not found", "not available", "deprecated"))):
+        payload2 = {**payload, "model": "auto"}
+        status2, data2 = await call_upstream(wire, payload2, _allow_model_fallback=False)
+        if status2 < 400:
+            if isinstance(data2, dict):
+                data2["_gateway_model_fallback"] = str(model)
+            return status2, data2
+
     return 502, {"error": {"message": f"all providers failed. last: {last_err}"}}
 
 
