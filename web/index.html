@@ -191,7 +191,7 @@
     <!-- KEYS -->
     <section id="tab-keys" class="hide">
       <h1>Keys</h1><div class="sub">Every key you added. Requests are load-balanced; rate-limited keys cool down automatically.</div>
-      <div class="card" style="padding:6px 0;overflow:auto"><table id="keysTbl"></table></div>
+      <div id="keysGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px"></div>
     </section>
 
     <!-- AGENTS -->
@@ -346,25 +346,74 @@ function renderProviders(){
     </div>`).join("");
 }
 
+function fmtNum(n){
+  n = Number(n||0);
+  if (n >= 1e9) return (n/1e9).toFixed(2)+"B";
+  if (n >= 1e6) return (n/1e6).toFixed(2)+"M";
+  if (n >= 1e3) return (n/1e3).toFixed(1)+"K";
+  return String(n);
+}
+
+function healthDot(k){
+  if (k.health === "ok")  return {c:"var(--ok)",  t:"healthy"};
+  if (k.health === "bad") return {c:"var(--bad)", t:"failing"};
+  return {c:"var(--line)", t:"not checked"};
+}
+
 function renderKeys(){
-  $("keysTbl").innerHTML = `<tr><th>Provider</th><th>Label</th><th>Key</th><th>Requests</th>
-      <th>Status</th><th></th></tr>` +
-    (STATE.keys.length ? STATE.keys.map(k=>`
-      <tr>
-        <td>${esc(k.provider)}</td>
-        <td class="muted">${esc(k.label||"—")}</td>
-        <td class="mono">${esc(k.secret_masked)}</td>
-        <td class="muted">${k.requests}</td>
-        <td>${k.cooling ? `<span style="color:var(--warn)">cooling</span>`
-              : k.enabled ? `<span style="color:var(--ok)">active</span>`
-              : `<span class="muted">disabled</span>`}</td>
-        <td style="text-align:right;white-space:nowrap">
-          <button class="sm" onclick="testKey('${k.id}')">Test</button>
-          <button class="sm" onclick="toggleKey('${k.id}',${k.enabled?0:1})">${k.enabled?'Disable':'Enable'}</button>
-          <button class="sm danger" onclick="delKey('${k.id}')">Delete</button>
-        </td>
-      </tr>`).join("")
-     : `<tr><td colspan="6" class="muted">No keys yet — open Providers and add one.</td></tr>`);
+  const el = $("keysGrid");
+  if (!STATE.keys.length){
+    el.innerHTML = `<div class="pcard" style="padding:18px" class="muted">
+      <b>No keys yet</b><div class="muted" style="font-size:12.5px;margin-top:6px">
+      Open <b>Providers</b> and add a key — it will be health-checked automatically.</div></div>`;
+    return;
+  }
+  el.innerHTML = STATE.keys.map(k=>{
+    const d = healthDot(k);
+    const used = Number(k.tokens_used||0), lim = Number(k.token_limit||0);
+    const pct = lim ? Math.min(100, Math.round(used/lim*100)) : 0;
+    const when = k.health_ts ? new Date(k.health_ts*1000).toLocaleTimeString() : "";
+    const models = (k.models||[]);
+    return `<div class="pcard" style="padding:14px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="dot" style="background:${d.c};box-shadow:0 0 8px ${d.c}"></span>
+        <b style="font-size:13.5px">${esc(k.label || k.provider)}</b>
+        <span class="pill">${esc(k.provider)}</span>
+        ${k.enabled ? "" : `<span class="pill">disabled</span>`}
+        ${k.cooling ? `<span class="pill card">cooling</span>` : ""}
+      </div>
+
+      <div class="mono muted" style="font-size:11px;margin:6px 0 10px">${esc(k.secret_masked)}</div>
+
+      <div style="display:flex;gap:16px;font-size:12px;margin-bottom:10px">
+        <div><div class="muted" style="font-size:10.5px">Requests</div><b>${fmtNum(k.requests)}</b></div>
+        <div><div class="muted" style="font-size:10.5px">Models</div><b>${k.models_count||0}</b></div>
+        <div><div class="muted" style="font-size:10.5px">Tokens used</div>
+             <b>${fmtNum(used)}</b>${lim?` <span class="muted">/ ${fmtNum(lim)}</span>`:""}</div>
+      </div>
+
+      ${lim ? `<div style="height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-bottom:8px">
+        <div style="height:100%;width:${pct}%;background:${pct>90?"var(--bad)":pct>70?"var(--warn)":"var(--ok)"}"></div></div>` : ""}
+
+      <div class="muted" style="font-size:11px;margin-bottom:8px">
+        ${d.t}${when?` · ${when}`:""}${k.health_msg?` · ${esc(String(k.health_msg).slice(0,90))}`:""}
+      </div>
+
+      ${models.length ? `<details style="margin-bottom:8px">
+        <summary class="muted" style="font-size:11.5px;cursor:pointer">${models.length} models</summary>
+        <div class="mono" style="font-size:10.5px;max-height:140px;overflow:auto;margin-top:6px;line-height:1.6">
+          ${models.map(m=>esc(m)).join("<br>")}
+        </div></details>` : ""}
+
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="sm" onclick="testKey('${k.id}')">Test</button>
+        <button class="sm" onclick="loadModels('${k.id}')">Models</button>
+        <button class="sm" onclick="setLimit('${k.id}', ${lim})">Limit</button>
+        <button class="sm" onclick="toggleKey('${k.id}',${k.enabled?0:1})">${k.enabled?"Disable":"Enable"}</button>
+        <button class="sm danger" onclick="delKey('${k.id}')">Delete</button>
+      </div>
+    </div>`;
+  }).join("");
 }
 
 function renderAgents(){
@@ -415,9 +464,27 @@ async function saveKey(){
 async function toggleKey(id, en){ await api(`/api/keys/${id}`, {method:"PATCH", body: JSON.stringify({enabled: en})}); await load(); }
 async function delKey(id){ if(!confirm("Delete this key?")) return; await api(`/api/keys/${id}`, {method:"DELETE"}); await load(); }
 async function testKey(id){
-  toast("Testing…");
+  toast("Testing key…");
   const j = await api(`/api/test/${id}`, {method:"POST"});
-  toast(j.ok ? `Works ✓ (${j.status})` : `Failed (${j.status||"err"})`);
+  if (j.ok) toast(`Healthy ✓ ${j.models_count?`· ${j.models_count} models`:""}`);
+  else toast(`Failed (${j.status||"err"})`);
+  await load();
+}
+
+async function loadModels(id){
+  toast("Fetching models…");
+  const j = await api(`/api/keys/${id}/models`, {method:"POST"});
+  toast(j.ok ? `${j.models_count} models` : "Provider did not return a model list");
+  await load();
+}
+
+async function setLimit(id, cur){
+  const v = prompt("Token limit for this key (0 = no limit):", cur || 0);
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (isNaN(n) || n < 0) { toast("Enter a number"); return; }
+  await api(`/api/keys/${id}`, {method:"PATCH", body: JSON.stringify({token_limit: n})});
+  toast(n ? `Limit set to ${n.toLocaleString()}` : "Limit cleared");
   await load();
 }
 async function rotateKey(){
