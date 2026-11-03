@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
+import random
 import re
 import secrets
 import sqlite3
@@ -95,6 +97,56 @@ PROVIDERS: list[dict[str, Any]] = [
          signup="https://radoxai.com", free="Cheap paid (Claude-compatible)", card=True),
     dict(id="freemodel", name="FreeModel.in", type="anthropic", base="https://freemodel.in",
          signup="https://freemodel.in", free="Cheap paid (Claude-compatible)", card=True),
+    dict(id="apinex", name="Apinex (free relay)", type="openai",
+         base="https://api.apinex.bond/v1", signup="", free="community free relay", card=False),
+    dict(id="beatapi", name="Beatapi (free relay)", type="openai",
+         base="https://api.beatapi.io/v1", signup="", free="community free relay", card=False),
+    dict(id="blockrun", name="Blockrun (free relay)", type="openai",
+         base="https://api.blockrun.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="electronhub", name="Electronhub (free relay)", type="openai",
+         base="https://api.electronhub.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="freeai", name="Freeai (free relay)", type="openai",
+         base="https://api.free.ai", signup="", free="community free relay", card=False),
+    dict(id="gizmo", name="Gizmo (free relay)", type="openai",
+         base="https://api.gizmoplatforms.com/api/v1", signup="", free="community free relay", card=False),
+    dict(id="inferbase", name="Inferbase (free relay)", type="openai",
+         base="https://api.inferbase.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="iteracompute", name="Iteracompute (free relay)", type="openai",
+         base="https://api.iteracompute.com/v1", signup="", free="community free relay", card=False),
+    dict(id="jamai", name="Jamai (free relay)", type="openai",
+         base="https://api.jamaibase.com/api/v1", signup="", free="community free relay", card=False),
+    dict(id="keenable", name="Keenable (free relay)", type="openai",
+         base="https://api.keenable.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="kenari", name="Kenari (free relay)", type="openai",
+         base="https://kenari.id/v1", signup="", free="community free relay", card=False),
+    dict(id="kiosapi", name="Kiosapi (free relay)", type="openai",
+         base="https://api.kiosapi.id/v1", signup="", free="community free relay", card=False),
+    dict(id="llmtr", name="Llmtr (free relay)", type="openai",
+         base="https://llmtr.com/v1", signup="", free="community free relay", card=False),
+    dict(id="modelscope", name="Modelscope (free relay)", type="openai",
+         base="https://api-inference.modelscope.cn/v1", signup="", free="community free relay", card=False),
+    dict(id="nabh", name="Nabh (free relay)", type="openai",
+         base="https://api.nabh.cloud/v1", signup="", free="community free relay", card=False),
+    dict(id="novai", name="Novai (free relay)", type="openai",
+         base="https://aiapi-pro.com/v1", signup="", free="community free relay", card=False),
+    dict(id="onomeo", name="Onomeo (free relay)", type="openai",
+         base="https://onomeo.com/v1", signup="", free="community free relay", card=False),
+    dict(id="plugsky", name="Plugsky (free relay)", type="openai",
+         base="https://plugsky.com/v1", signup="", free="community free relay", card=False),
+    dict(id="pollinations", name="Pollinations (free relay)", type="openai",
+         base="https://gen.pollinations.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="router9", name="Router9 (free relay)", type="openai",
+         base="https://api.router9.com/v1", signup="", free="community free relay", card=False),
+    dict(id="sail", name="Sail (free relay)", type="openai",
+         base="https://api.sailresearch.com/v1", signup="", free="community free relay", card=False),
+    dict(id="simplellm", name="Simplellm (free relay)", type="openai",
+         base="https://api.simplellm.eu/v1", signup="", free="community free relay", card=False),
+    dict(id="speka", name="Speka (free relay)", type="openai",
+         base="https://speka.me/v1", signup="", free="community free relay", card=False),
+    dict(id="typhoon", name="Typhoon (free relay)", type="openai",
+         base="https://api.opentyphoon.ai/v1", signup="", free="community free relay", card=False),
+    dict(id="zhipu", name="Zhipu (free relay)", type="openai",
+         base="https://open.bigmodel.cn/api/paas/v4", signup="", free="community free relay", card=False),
     dict(id="custom_openai", name="Custom — OpenAI-compatible", type="openai", base="",
          signup="", free="Your own endpoint (vLLM, LM Studio, relay…)", card=False),
     dict(id="custom_anthropic", name="Custom — Anthropic-compatible", type="anthropic", base="",
@@ -627,6 +679,107 @@ def _key_models(row: dict) -> list[str]:
 
 BIG_PAYLOAD = int(os.environ.get("BIG_PAYLOAD_BYTES", "40000"))
 
+# --------------------------------------------------------------------------- #
+# bandit scoring (port of FreeLLMAPI's routing & bandit scoring)
+#   base      = w_rel*reliability + w_speed*speed + w_intel*intelligence
+#   effective = base * headroom * rateLimitFactor
+# reliability uses Thompson sampling over decay-weighted Beta posteriors, so
+# under-explored keys get tried automatically instead of starving.
+# --------------------------------------------------------------------------- #
+ROUTING_STRATEGIES = {
+    "balanced": (0.50, 0.25, 0.25),
+    "reliable": (0.80, 0.10, 0.10),
+    "fastest":  (0.20, 0.70, 0.10),
+    "smartest": (0.20, 0.10, 0.70),
+}
+DECAY_HALFLIFE_DAYS = 2.0
+STATS_WINDOW_DAYS = 7
+SPEED_PRIOR = 0.6
+
+
+def _decay(age_days: float) -> float:
+    return 0.5 ** (age_days / DECAY_HALFLIFE_DAYS)
+
+
+def routing_strategy() -> str:
+    st = (setting("routing_strategy") or os.environ.get("GW_ROUTING", "balanced")).lower()
+    return st if st in ROUTING_STRATEGIES else "balanced"
+
+
+def key_history(key_id: str) -> dict:
+    """Decay-weighted successes/failures/latency from the event log."""
+    since = time.time() - STATS_WINDOW_DAYS * 86400
+    rows = with_db("""SELECT ts, ok, ms, completion_tokens FROM events
+                      WHERE key_id=? AND ts>?""", (key_id, since))
+    succ = fail = lat = toks = 0.0
+    for r in rows:
+        w = _decay(max(0.0, (time.time() - r["ts"]) / 86400))
+        if r["ok"]:
+            succ += w
+            lat += w * (r["ms"] or 0)
+            toks += w * (r["completion_tokens"] or 0)
+        else:
+            fail += w
+    return {"succ": succ, "fail": fail, "lat": lat, "toks": toks, "n": len(rows)}
+
+
+def reliability_sample(hist: dict) -> float:
+    """Thompson sampling: Beta(successes+1, failures+1)."""
+    a = hist["succ"] + 1.0
+    b = hist["fail"] + 1.0
+    try:
+        return random.betavariate(a, b)
+    except Exception:
+        return a / (a + b)
+
+
+def speed_score(hist: dict) -> float:
+    """0.6*throughput + 0.4*ttfb, saturating like the upstream formula."""
+    if not hist["n"] or not hist["succ"]:
+        return SPEED_PRIOR
+    ms = hist["lat"] / max(hist["succ"], 1e-9)
+    tps = (hist["toks"] / (ms / 1000.0)) if ms and hist["toks"] else 0.0
+    thr = (1 - math.exp(-tps / 60.0)) if tps else 0.0
+    ttfb = max(0.0, min(1.0, (5000.0 - ms) / (5000.0 - 300.0)))
+    return 0.6 * thr + 0.4 * ttfb if tps else ttfb
+
+
+def intelligence_score(key: dict) -> float:
+    """No static catalog rank here, so infer from the model name."""
+    name = (resolve_model(key) or "").lower()
+    for needle, val in (("opus", 1.0), ("405b", 1.0), ("sonnet", 0.85), ("70b", 0.85),
+                        ("pro", 0.8), ("32b", 0.75), ("27b", 0.7), ("12b", 0.6),
+                        ("8b", 0.45), ("flash", 0.5), ("mini", 0.4), ("lite", 0.35),
+                        ("haiku", 0.4)):
+        if needle in name:
+            return val
+    return 0.55
+
+
+def headroom_factor(key: dict) -> float:
+    used = int(key.get("tokens_used") or 0)
+    limit = int(key.get("token_limit") or 0)
+    if limit <= 0:
+        return 1.0
+    return max(0.15, 1.0 - used / limit)
+
+
+def rate_limit_factor(key: dict) -> float:
+    if (key.get("cooldown_until") or 0) > time.time():
+        return 0.2
+    if int(key.get("small_only") or 0) and False:
+        return 0.5
+    return 1.0
+
+
+def score_key(key: dict, strategy: str | None = None) -> float:
+    w_rel, w_speed, w_intel = ROUTING_STRATEGIES[strategy or routing_strategy()]
+    hist = key_history(key["id"])
+    base = (w_rel * reliability_sample(hist)
+            + w_speed * speed_score(hist)
+            + w_intel * intelligence_score(key))
+    return base * headroom_factor(key) * rate_limit_factor(key)
+
 
 def pick_keys(wire: str, model: str = "", size: int = 0) -> list[dict]:
     """Enabled, not-cooling keys. Prefer keys that actually serve the asked model."""
@@ -648,7 +801,12 @@ def pick_keys(wire: str, model: str = "", size: int = 0) -> list[dict]:
 
     same = [r for r in alive if PROVIDER_MAP[r["provider"]]["type"] == wire]
     other = [r for r in alive if r not in same]
-    return same + other
+    ordered = same + other
+    try:
+        ordered.sort(key=lambda k: score_key(k), reverse=True)
+    except Exception:
+        pass
+    return ordered
 
 
 def log_event(**kw: Any) -> None:
@@ -974,6 +1132,21 @@ def compress_mode(request: Request | None = None) -> str:
             if COMPRESS_MODES.index(hdr) <= COMPRESS_MODES.index(configured):
                 return hdr
     return configured
+
+
+@app.get("/api/routing")
+def api_routing_get(_: None = Depends(require_session)) -> dict:
+    return {"strategy": routing_strategy(), "strategies": list(ROUTING_STRATEGIES),
+            "weights": ROUTING_STRATEGIES}
+
+
+@app.put("/api/routing")
+def api_routing_put(body: dict, _: None = Depends(require_session)) -> dict:
+    st = str(body.get("strategy", "")).lower()
+    if st not in ROUTING_STRATEGIES:
+        raise HTTPException(400, "strategy must be one of " + ", ".join(ROUTING_STRATEGIES))
+    set_setting("routing_strategy", st)
+    return {"ok": True, "strategy": st}
 
 
 @app.get("/api/compression")
