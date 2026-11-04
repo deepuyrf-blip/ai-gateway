@@ -691,9 +691,18 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
             status, body = r.status_code, r.text[:400]
             ok = status < 400
             if ok:
-                # remember the model that actually worked, so routing uses it
+                # Remember the model that actually worked by putting it FIRST in the
+                # stored list — providers publish catalogs full of models the account
+                # cannot use, so ranking alone would keep picking a dead one.
+                mids = _key_models(key)
+                if cand in mids:
+                    mids = [cand] + [m for m in mids if m != cand]
+                elif mids:
+                    mids = [cand] + mids
                 with db() as c:
-                    c.execute("UPDATE keys SET models_ts=? WHERE id=?", (time.time(), key["id"]))
+                    c.execute("UPDATE keys SET models=?, models_ts=? WHERE id=?",
+                              (json.dumps(mids), time.time(), key["id"]))
+                key["models"] = json.dumps(mids)
                 key["_working_model"] = cand
                 break
         except Exception as e:
@@ -701,6 +710,13 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
             ok = False
 
     models = await fetch_provider_models(key) if with_models else []
+    if models:
+        # Keep models we already trust first: providers publish catalogs full of
+        # models this account cannot call, and re-ranking would keep picking a dead
+        # one. Known-good order wins; anything new is appended after it.
+        known = _key_models(key)
+        if known:
+            models = known + [m for m in models if m not in known]
 
     health = "ok" if ok else "bad"
     msg = "" if ok else f"{status} {body}"[:200]
@@ -1013,6 +1029,10 @@ def rank_models(mids: list[str]) -> list[str]:
 
     good = [m for m in mids if not any(b in m.lower() for b in BAD_SUBSTR)]
     pool = good or mids
+    # A short list was curated (health-checked / hand-picked) — respect its order,
+    # because providers publish catalogs full of models this account cannot call.
+    if len(pool) <= 25:
+        return list(pool)
     try:
         return sorted(pool, key=score, reverse=True)
     except Exception:
