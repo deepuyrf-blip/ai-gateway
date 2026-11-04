@@ -716,7 +716,10 @@ async def run_health(key: dict, with_models: bool = True) -> dict:
         # one. Known-good order wins; anything new is appended after it.
         known = _key_models(key)
         if known:
-            models = known + [m for m in models if m not in known]
+            # Keep the curated list short so its order is respected: a huge catalog
+            # makes the ranker pick a model this account cannot call (404s).
+            extra = [m for m in models if m not in known][:10]
+            models = known + extra
 
     health = "ok" if ok else "bad"
     msg = "" if ok else f"{status} {body}"[:200]
