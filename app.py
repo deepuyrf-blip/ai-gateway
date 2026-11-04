@@ -1039,6 +1039,9 @@ async def call_upstream(wire: str, payload: dict, _allow_model_fallback: bool = 
         cur = body.get("model")
         if cur in (None, "") or str(cur) == "auto" or str(cur).endswith("/auto"):
             body["model"] = resolve_model(key, str(cur or "auto"))
+        if wire == "openai" and prov["type"] == "anthropic":
+            # caller speaks OpenAI, this key speaks Anthropic — translate the body
+            body = openai_to_anthropic_request(body)
 
         t0 = time.time()
         try:
@@ -1299,6 +1302,86 @@ def api_compression_preview(body: dict, _: None = Depends(require_session)) -> d
             "est_tokens_before": compressor.estimate_tokens(json.dumps(sample)),
             "est_tokens_after": compressor.estimate_tokens(json.dumps(out)),
             "preview": json.dumps(out)[:2000]}
+
+
+def openai_to_anthropic_request(oa: dict) -> dict:
+    """Translate an OpenAI chat body into an Anthropic /v1/messages body.
+
+    Needed when the caller speaks the OpenAI wire (OpenCode, most clients) but the
+    only available key is anthropic-type: Anthropic expects tools as
+    {name, description, input_schema}, not {type:function, function:{...}}.
+    """
+    out: dict[str, Any] = {
+        "model": oa.get("model") or "auto",
+        "max_tokens": int(oa.get("max_tokens") or oa.get("max_completion_tokens") or 4096),
+        "messages": [],
+    }
+    system_parts: list[str] = []
+
+    def as_text(v: Any) -> str:
+        if isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "".join(b.get("text", "") for b in v if isinstance(b, dict))
+        return json.dumps(v) if v is not None else ""
+
+    for m in oa.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role in ("system", "developer"):
+            system_parts.append(as_text(content))
+            continue
+        if role == "tool":
+            out["messages"].append({"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": m.get("tool_call_id") or "",
+                "content": as_text(content),
+            }]})
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            blocks: list[dict] = []
+            if content:
+                blocks.append({"type": "text", "text": as_text(content)})
+            for tc in m["tool_calls"]:
+                fn = tc.get("function") or {}
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    args = {}
+                blocks.append({"type": "tool_use", "id": tc.get("id") or "tool_" + uuid.uuid4().hex[:8],
+                               "name": fn.get("name") or "tool", "input": args})
+            out["messages"].append({"role": "assistant", "content": blocks})
+            continue
+        out["messages"].append({
+            "role": "assistant" if role == "assistant" else "user",
+            "content": content if isinstance(content, (str, list)) else as_text(content),
+        })
+
+    if system_parts:
+        out["system"] = "\n\n".join(p for p in system_parts if p)
+
+    tools = oa.get("tools")
+    if isinstance(tools, list) and tools:
+        conv = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function") if isinstance(t.get("function"), dict) else t
+            name = fn.get("name")
+            if not name:
+                continue
+            conv.append({"name": name,
+                         "description": fn.get("description") or "",
+                         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}}})
+        if conv:
+            out["tools"] = conv
+
+    for k in ("temperature", "top_p", "stop"):
+        if k in oa:
+            out[k] = oa[k]
+    return out
 
 
 def ensure_openai_response(data: Any, model: str = "") -> Any:
