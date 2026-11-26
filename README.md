@@ -15,6 +15,22 @@ Goose — anything that speaks the OpenAI or Anthropic wire.
             └──────────────────────────────────────────────┘
 ```
 
+## Status
+
+Early but working: the router, both wires (OpenAI + Anthropic), failover,
+the dashboard and the built-in tester are in use daily. Provider adapters are
+added as upstream APIs change. Issues and pull requests are welcome — the
+maintainer reviews every one.
+
+## Who it is for
+
+- Developers running **Claude Code / Codex / OpenCode / Aider** who want one
+  endpoint instead of a base URL per tool.
+- People on **free tiers and multiple API keys** who need automatic rotation
+  when a quota runs out.
+- Anyone who wants their keys to stay **on their own box**, not in a hosted
+  proxy.
+
 ## Why
 
 - **One endpoint, many providers.** Stop wiring a new base URL for every tool.
@@ -167,5 +183,7 @@ is opened from a different origin (e.g. straight off disk).
 - **Railway / Render / Fly.io** — Dockerfile is standard
 
 ## License
+
+MIT — see [LICENSE](LICENSE).
 
 MIT
